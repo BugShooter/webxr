@@ -83,12 +83,15 @@
 </head>
 <body>
     <div id="container">
-        <h1>🥽 WebXR Стерео v2</h1>
-        <p>Левый глаз увидит <span style="color: #ff6b6b;">красный куб</span><br>
-        Правый глаз увидит <span style="color: #4ecdc4;">синюю сферу</span></p>
+        <h1>🥽 Бинокулярный MVP</h1>
+        <p>
+            Тренажёр «Совмести точки» (dichoptic alignment)<br>
+            Стик: влево/вправо — смещение, вверх/вниз — дистанция<br>
+            Триггер: подтвердить
+        </p>
         <button id="startBtn" onclick="startXR()">Запустить VR</button>
         <div id="status">Готово к запуску</div>
-        <div class="version">v3.0 - С отладкой в VR</div>
+        <div class="version">v0.1 - MVP alignment</div>
     </div>
     
     <canvas id="glCanvas"></canvas>
@@ -96,11 +99,21 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script>
         let scene, camera, renderer;
-        let leftCube, rightSphere;
-        let debugTextLeft, debugTextRight;
+        let leftMarker, rightMarker;
+        let hudInfoSprite, hudFeedbackSprite;
+        let crosshair;
         let xrSession = null;
         let frameCount = 0;
         let debugInfo = { leftEye: 'unknown', rightEye: 'unknown', viewCount: 0 };
+
+        // Параметры тренажёра
+        let targetDistance = 2.0; // метры до плоскости стимулов
+        let disparityX = 0.25; // текущее смещение (м)
+        let tolerance = 0.015; // порог совпадения (м)
+        let score = 0;
+        let trials = 0;
+        let lastTimeMs = 0;
+        let lastSelectAtMs = -1e9;
         
         const canvas = document.getElementById('glCanvas');
         const startBtn = document.getElementById('startBtn');
@@ -130,8 +143,7 @@
             startBtn.disabled = true;
         }
         
-        // Функция создания текста в 3D (поддержка многострочного текста)
-        function createTextSprite(message, backgroundColor) {
+        function createTextTexture(message, backgroundColor) {
             const canvas = document.createElement('canvas');
             const context = canvas.getContext('2d');
             canvas.width = 512;
@@ -171,11 +183,39 @@
 
             const texture = new THREE.CanvasTexture(canvas);
             texture.needsUpdate = true;
+            return texture;
+        }
+
+        // Функция создания текста в 3D (поддержка многострочного текста)
+        function createTextSprite(message, backgroundColor) {
+            const texture = createTextTexture(message, backgroundColor);
             const material = new THREE.SpriteMaterial({ map: texture });
             const sprite = new THREE.Sprite(material);
             sprite.scale.set(2, 1, 1);
-
             return sprite;
+        }
+
+        function updateTextSprite(sprite, message, backgroundColor) {
+            if (!sprite || !sprite.material) return;
+            const oldMap = sprite.material.map;
+            sprite.material.map = createTextTexture(message, backgroundColor);
+            sprite.material.needsUpdate = true;
+            if (oldMap) oldMap.dispose();
+        }
+
+        function clamp(v, min, max) {
+            return Math.min(max, Math.max(min, v));
+        }
+
+        function deadzone(v, dz) {
+            return Math.abs(v) < dz ? 0 : v;
+        }
+
+        function randomizeTrial() {
+            const mag = 0.08 + Math.random() * 0.30;
+            const sign = Math.random() < 0.5 ? -1 : 1;
+            disparityX = mag * sign;
+            trials++;
         }
         
         // Инициализация сцены
@@ -207,54 +247,47 @@
             const light1 = new THREE.DirectionalLight(0xffffff, 0.8);
             light1.position.set(2, 3, 2);
             scene.add(light1);
-            
-            // КРАСНЫЙ КУБ для левого глаза
-            const cubeGeom = new THREE.BoxGeometry(0.6, 0.6, 0.6);
-            const cubeMat = new THREE.MeshStandardMaterial({ 
-                color: 0xff0000,
-                metalness: 0.3,
-                roughness: 0.4,
-                emissive: 0xff0000,
-                emissiveIntensity: 0.5
-            });
-            leftCube = new THREE.Mesh(cubeGeom, cubeMat);
-            leftCube.position.set(0, 1.6, -2.5);
-            leftCube.layers.set(1); // слой 1: левый глаз
-            scene.add(leftCube);
-            
-            // СИНЯЯ СФЕРА для правого глаза
-            const sphereGeom = new THREE.SphereGeometry(0.35, 32, 32);
-            const sphereMat = new THREE.MeshStandardMaterial({ 
-                color: 0x0000ff,
-                metalness: 0.3,
-                roughness: 0.4,
-                emissive: 0x0000ff,
-                emissiveIntensity: 0.5
-            });
-            rightSphere = new THREE.Mesh(sphereGeom, sphereMat);
-            rightSphere.position.set(0, 1.6, -2.5);
-            rightSphere.layers.set(2); // слой 2: правый глаз
-            scene.add(rightSphere);
-            
-            // Текстовые метки для отладки - ЛЕВАЯ
-            debugTextLeft = createTextSprite('LEFT EYE\nКрасный куб', '#ff0000');
-            debugTextLeft.position.set(-1.5, 2.5, -2.5);
-            debugTextLeft.layers.set(1);
-            scene.add(debugTextLeft);
-            
-            // Текстовые метки для отладки - ПРАВАЯ
-            debugTextRight = createTextSprite('RIGHT EYE\nСиняя сфера', '#0000ff');
-            debugTextRight.position.set(1.5, 2.5, -2.5);
-            debugTextRight.layers.set(2);
-            scene.add(debugTextRight);
-            
-            // Информационная панель
-            const infoSprite = createTextSprite('Закройте по очереди\nкаждый глаз', '#ffffff');
-            infoSprite.position.set(0, 2.8, -2.5);
-            infoSprite.scale.set(3, 1.5, 1);
-            infoSprite.layers.set(1);
-            infoSprite.layers.enable(2); // видно обоими глазами
-            scene.add(infoSprite);
+
+            // Крест фиксации (виден обоими глазами)
+            crosshair = new THREE.Group();
+            crosshair.layers.set(0);
+            const chMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            const chH = new THREE.Mesh(new THREE.BoxGeometry(0.20, 0.01, 0.01), chMat);
+            const chV = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.20, 0.01), chMat);
+            crosshair.add(chH);
+            crosshair.add(chV);
+            crosshair.position.set(0, 1.6, -targetDistance);
+            scene.add(crosshair);
+
+            // Маркеры для разных глаз
+            const markerGeom = new THREE.SphereGeometry(0.035, 24, 24);
+            const leftMat = new THREE.MeshStandardMaterial({ color: 0xff4d4d, emissive: 0xff0000, emissiveIntensity: 0.4 });
+            const rightMat = new THREE.MeshStandardMaterial({ color: 0x4d7dff, emissive: 0x0000ff, emissiveIntensity: 0.4 });
+
+            leftMarker = new THREE.Mesh(markerGeom, leftMat);
+            leftMarker.layers.set(1); // левый глаз
+            leftMarker.position.set(-disparityX / 2, 1.6, -targetDistance);
+            scene.add(leftMarker);
+
+            rightMarker = new THREE.Mesh(markerGeom, rightMat);
+            rightMarker.layers.set(2); // правый глаз
+            rightMarker.position.set(disparityX / 2, 1.6, -targetDistance);
+            scene.add(rightMarker);
+
+            // HUD в VR (виден обоими глазами)
+            hudInfoSprite = createTextSprite('Стик: X=смещение, Y=дистанция\nТриггер: подтвердить', '#222222');
+            hudInfoSprite.position.set(0, 2.55, -1.7);
+            hudInfoSprite.scale.set(3.2, 1.2, 1);
+            hudInfoSprite.layers.set(1);
+            hudInfoSprite.layers.enable(2);
+            scene.add(hudInfoSprite);
+
+            hudFeedbackSprite = createTextSprite('...', '#222222');
+            hudFeedbackSprite.position.set(0, 2.15, -1.7);
+            hudFeedbackSprite.scale.set(2.6, 0.9, 1);
+            hudFeedbackSprite.layers.set(1);
+            hudFeedbackSprite.layers.enable(2);
+            scene.add(hudFeedbackSprite);
             
             // Пол
             const floorGeom = new THREE.PlaneGeometry(10, 10);
@@ -271,6 +304,33 @@
             const grid = new THREE.GridHelper(10, 20, 0x666666, 0x444444);
             grid.position.y = 0.01;
             scene.add(grid);
+
+            // Контроллеры: триггер (select) для подтверждения
+            const controller0 = renderer.xr.getController(0);
+            const controller1 = renderer.xr.getController(1);
+            const onSelect = () => {
+                const now = performance.now();
+                // антидребезг
+                if (now - lastSelectAtMs < 250) return;
+                lastSelectAtMs = now;
+
+                const aligned = Math.abs(disparityX) <= tolerance;
+                if (aligned) score++;
+                updateTextSprite(
+                    hudFeedbackSprite,
+                    aligned ? 'OK ✅\nСледующий раунд' : 'Не совпало ❌\nПопробуйте ещё',
+                    aligned ? '#1f7a3a' : '#7a1f1f'
+                );
+
+                // новый раунд (и при успехе, и при ошибке — чтобы было движение)
+                randomizeTrial();
+            };
+            controller0.addEventListener('selectstart', onSelect);
+            controller1.addEventListener('selectstart', onSelect);
+            scene.add(controller0);
+            scene.add(controller1);
+
+            randomizeTrial();
             
             log('✅ Three.js готов');
         }
@@ -316,10 +376,70 @@
         function animate(time) {
             frameCount++;
 
-            // Анимация объектов
-            leftCube.rotation.x = time * 0.0005;
-            leftCube.rotation.y = time * 0.001;
-            rightSphere.rotation.y = time * 0.001;
+            const dt = lastTimeMs ? (time - lastTimeMs) / 1000 : 0;
+            lastTimeMs = time;
+
+            // Вращаем маркеры слегка, чтобы были "живыми"
+            if (leftMarker) {
+                leftMarker.rotation.y = time * 0.001;
+                leftMarker.rotation.x = time * 0.0005;
+            }
+            if (rightMarker) {
+                rightMarker.rotation.y = time * 0.001;
+            }
+
+            // Чтение стика с контроллеров (WebXR Gamepad)
+            const session = renderer.xr.getSession();
+            if (session && dt > 0) {
+                let stickX = 0;
+                let stickY = 0;
+
+                for (const src of session.inputSources) {
+                    if (!src || !src.gamepad) continue;
+                    // предпочитаем правый, но если нет — берём любой
+                    if (src.handedness && src.handedness !== 'right' && src.handedness !== 'none') continue;
+
+                    const axes = src.gamepad.axes || [];
+                    // Oculus Touch обычно: axes[2]=x, axes[3]=y; но встречается и [0],[1]
+                    if (axes.length >= 4) {
+                        stickX = axes[2];
+                        stickY = axes[3];
+                    } else if (axes.length >= 2) {
+                        stickX = axes[0];
+                        stickY = axes[1];
+                    }
+                    break;
+                }
+
+                stickX = deadzone(stickX, 0.12);
+                stickY = deadzone(stickY, 0.12);
+
+                // Управление: X — смещение; Y — дистанция (вверх = ближе)
+                disparityX = clamp(disparityX + stickX * 0.60 * dt, -0.6, 0.6);
+                targetDistance = clamp(targetDistance - stickY * 0.90 * dt, 0.6, 4.0);
+            }
+
+            // Обновляем позиции стимулов
+            if (crosshair) crosshair.position.set(0, 1.6, -targetDistance);
+            if (leftMarker) leftMarker.position.set(-disparityX / 2, 1.6, -targetDistance);
+            if (rightMarker) rightMarker.position.set(disparityX / 2, 1.6, -targetDistance);
+
+            // Живой статус
+            const alignedNow = Math.abs(disparityX) <= tolerance;
+            if (hudInfoSprite && frameCount % 10 === 0) {
+                updateTextSprite(
+                    hudInfoSprite,
+                    `Стик: X=смещение, Y=дистанция\nДистанция: ${targetDistance.toFixed(2)} м  |  |смещение|: ${Math.abs(disparityX).toFixed(3)} м\nСчёт: ${score}/${trials}`,
+                    '#222222'
+                );
+            }
+            if (hudFeedbackSprite && frameCount % 10 === 0) {
+                updateTextSprite(
+                    hudFeedbackSprite,
+                    alignedNow ? 'СЕЙЧАС СОВПАЛО ✅\nНажмите триггер' : 'Совместите точки\nи нажмите триггер',
+                    alignedNow ? '#1f7a3a' : '#222222'
+                );
+            }
 
             // В WebXR three.js сам рисует оба глаза за один render().
             // Разделение контента по глазам делаем через layers.
@@ -341,388 +461,6 @@
             }
 
             renderer.render(scene, camera);
-        }
-    </script>
-</body>
-</html><!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebXR Stereo Rendering</title>
-    <style>
-        body {
-            margin: 0;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-        }
-        
-        #container {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            text-align: center;
-            max-width: 90%;
-            background: rgba(255, 255, 255, 0.1);
-            padding: 30px;
-            border-radius: 20px;
-            backdrop-filter: blur(10px);
-            z-index: 100;
-        }
-        
-        h1 {
-            margin: 0 0 15px 0;
-            font-size: 1.8em;
-        }
-        
-        p {
-            margin: 0 0 25px 0;
-            opacity: 0.9;
-            line-height: 1.5;
-        }
-        
-        button {
-            background: white;
-            color: #667eea;
-            border: none;
-            padding: 18px 45px;
-            font-size: 20px;
-            font-weight: bold;
-            border-radius: 50px;
-            cursor: pointer;
-            transition: all 0.3s;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
-        }
-        
-        button:active {
-            transform: scale(0.95);
-        }
-        
-        button:disabled {
-            background: #ccc;
-            color: #666;
-            cursor: not-allowed;
-        }
-        
-        #status {
-            margin-top: 20px;
-            padding: 12px;
-            background: rgba(255, 255, 255, 0.15);
-            border-radius: 10px;
-            font-size: 15px;
-        }
-        
-        .version {
-            margin-top: 15px;
-            font-size: 12px;
-            opacity: 0.7;
-        }
-        
-        canvas {
-            display: block;
-            width: 100%;
-            height: 100%;
-        }
-    </style>
-</head>
-<body>
-    <div id="container">
-        <h1>🥽 WebXR Стерео v2</h1>
-        <p>Левый глаз увидит <span style="color: #ff6b6b;">красный куб</span><br>
-        Правый глаз увидит <span style="color: #4ecdc4;">синюю сферу</span></p>
-        <button id="startBtn" onclick="startXR()">Запустить VR</button>
-        <div id="status">Готово к запуску</div>
-        <div class="version">v2.0 - С отладкой в VR</div>
-    </div>
-    
-    <canvas id="glCanvas"></canvas>
-
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script>
-        let scene, camera, renderer;
-        let leftCube, rightSphere;
-        let debugTextLeft, debugTextRight;
-        let xrSession = null;
-        let frameCount = 0;
-        let debugInfo = { leftEye: 'unknown', rightEye: 'unknown', viewCount: 0 };
-        
-        const canvas = document.getElementById('glCanvas');
-        const startBtn = document.getElementById('startBtn');
-        const statusDiv = document.getElementById('status');
-        const container = document.getElementById('container');
-        
-        function log(msg) {
-            console.log(msg);
-            statusDiv.textContent = msg;
-        }
-        
-        // Проверка WebXR
-        if (navigator.xr) {
-            navigator.xr.isSessionSupported('immersive-vr').then(supported => {
-                if (supported) {
-                    log('✅ WebXR поддерживается');
-                } else {
-                    log('❌ VR не поддерживается');
-                    startBtn.disabled = true;
-                }
-            }).catch(err => {
-                log('❌ Ошибка проверки: ' + err.message);
-                startBtn.disabled = true;
-            });
-        } else {
-            log('❌ WebXR недоступен');
-            startBtn.disabled = true;
-        }
-        
-        // Функция создания текста в 3D
-        function createTextSprite(message, color) {
-            const canvas = document.createElement('canvas');
-            const context = canvas.getContext('2d');
-            canvas.width = 512;
-            canvas.height = 256;
-            
-            context.fillStyle = color;
-            context.fillRect(0, 0, canvas.width, canvas.height);
-            
-            context.font = 'Bold 60px Arial';
-            context.fillStyle = 'white';
-            context.textAlign = 'center';
-            context.textBaseline = 'middle';
-            context.fillText(message, canvas.width / 2, canvas.height / 2);
-            
-            const texture = new THREE.CanvasTexture(canvas);
-            const material = new THREE.SpriteMaterial({ map: texture });
-            const sprite = new THREE.Sprite(material);
-            sprite.scale.set(2, 1, 1);
-            
-            return sprite;
-        }
-        
-        // Инициализация сцены
-        function initThreeJS() {
-            log('🔧 Инициализация Three.js...');
-            
-            // Сцена
-            scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x0a0a0a);
-            
-            // Камера
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
-            camera.position.set(0, 1.6, 0);
-            
-            // Рендерер
-            renderer = new THREE.WebGLRenderer({ 
-                canvas: canvas,
-                antialias: true,
-                alpha: false
-            });
-            renderer.setPixelRatio(window.devicePixelRatio);
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.xr.enabled = true;
-            
-            // Освещение
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
-            scene.add(ambientLight);
-            
-            const light1 = new THREE.DirectionalLight(0xffffff, 0.8);
-            light1.position.set(2, 3, 2);
-            scene.add(light1);
-            
-            // КРАСНЫЙ КУБ для левого глаза
-            const cubeGeom = new THREE.BoxGeometry(0.6, 0.6, 0.6);
-            const cubeMat = new THREE.MeshStandardMaterial({ 
-                color: 0xff0000,
-                metalness: 0.3,
-                roughness: 0.4,
-                emissive: 0xff0000,
-                emissiveIntensity: 0.5
-            });
-            leftCube = new THREE.Mesh(cubeGeom, cubeMat);
-            leftCube.position.set(0, 1.6, -2.5);
-            scene.add(leftCube);
-            
-            // СИНЯЯ СФЕРА для правого глаза
-            const sphereGeom = new THREE.SphereGeometry(0.35, 32, 32);
-            const sphereMat = new THREE.MeshStandardMaterial({ 
-                color: 0x0000ff,
-                metalness: 0.3,
-                roughness: 0.4,
-                emissive: 0x0000ff,
-                emissiveIntensity: 0.5
-            });
-            rightSphere = new THREE.Mesh(sphereGeom, sphereMat);
-            rightSphere.position.set(0, 1.6, -2.5);
-            scene.add(rightSphere);
-            
-            // Текстовые метки для отладки - ЛЕВАЯ
-            debugTextLeft = createTextSprite('LEFT EYE\nКрасный куб', '#ff0000');
-            debugTextLeft.position.set(-1.5, 2.5, -2.5);
-            scene.add(debugTextLeft);
-            
-            // Текстовые метки для отладки - ПРАВАЯ
-            debugTextRight = createTextSprite('RIGHT EYE\nСиняя сфера', '#0000ff');
-            debugTextRight.position.set(1.5, 2.5, -2.5);
-            scene.add(debugTextRight);
-            
-            // Информационная панель
-            const infoSprite = createTextSprite('Закройте по очереди каждый глаз', '#ffffff');
-            infoSprite.position.set(0, 2.8, -2.5);
-            infoSprite.scale.set(3, 1.5, 1);
-            scene.add(infoSprite);
-            
-            // Пол
-            const floorGeom = new THREE.PlaneGeometry(10, 10);
-            const floorMat = new THREE.MeshStandardMaterial({ 
-                color: 0x333333,
-                side: THREE.DoubleSide
-            });
-            const floor = new THREE.Mesh(floorGeom, floorMat);
-            floor.rotation.x = -Math.PI / 2;
-            floor.position.y = 0;
-            scene.add(floor);
-            
-            // Сетка
-            const grid = new THREE.GridHelper(10, 20, 0x666666, 0x444444);
-            grid.position.y = 0.01;
-            scene.add(grid);
-            
-            log('✅ Three.js готов');
-        }
-        
-        // Запуск XR
-        async function startXR() {
-            try {
-                log('🚀 Запуск VR...');
-                startBtn.disabled = true;
-                
-                initThreeJS();
-                
-                xrSession = await navigator.xr.requestSession('immersive-vr', {
-                    requiredFeatures: ['local-floor']
-                });
-                
-                log('✅ Сессия создана');
-                
-                await renderer.xr.setSession(xrSession);
-                
-                container.style.display = 'none';
-                
-                log('✅ VR активен!');
-                
-                xrSession.addEventListener('end', () => {
-                    log('VR завершён');
-                    container.style.display = 'block';
-                    startBtn.disabled = false;
-                    xrSession = null;
-                    frameCount = 0;
-                });
-                
-                renderer.setAnimationLoop(animate);
-                
-            } catch (err) {
-                log('❌ Ошибка: ' + err.message);
-                console.error(err);
-                startBtn.disabled = false;
-            }
-        }
-        
-        // Анимация и рендеринг
-        function animate(time, frame) {
-            if (!frame) return;
-            
-            frameCount++;
-            
-            // Анимация объектов
-            leftCube.rotation.x = time * 0.0005;
-            leftCube.rotation.y = time * 0.001;
-            rightSphere.rotation.y = time * 0.001;
-            
-            const session = renderer.xr.getSession();
-            const refSpace = renderer.xr.getReferenceSpace();
-            const pose = frame.getViewerPose(refSpace);
-            
-            if (pose) {
-                const glLayer = session.renderState.baseLayer;
-                const gl = renderer.getContext();
-                
-                gl.bindFramebuffer(gl.FRAMEBUFFER, glLayer.framebuffer);
-                
-                debugInfo.viewCount = pose.views.length;
-                
-                // Рендерим для каждого глаза
-                for (let i = 0; i < pose.views.length; i++) {
-                    const view = pose.views[i];
-                    const viewport = glLayer.getViewport(view);
-                    gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
-                    
-                    camera.matrix.fromArray(view.transform.matrix);
-                    camera.projectionMatrix.fromArray(view.projectionMatrix);
-                    camera.updateMatrixWorld(true);
-                    
-                    // Собираем информацию о глазах
-                    if (frameCount < 60) {
-                        const eyeInfo = `View[${i}]: eye="${view.eye}", type=${typeof view.eye}`;
-                        console.log(eyeInfo);
-                        
-                        if (i === 0) debugInfo.leftEye = view.eye || 'undefined';
-                        if (i === 1) debugInfo.rightEye = view.eye || 'undefined';
-                    }
-                    
-                    // Определяем какой это глаз
-                    let isLeftEye = false;
-                    let isRightEye = false;
-                    
-                    // Метод 1: по строке eye
-                    if (view.eye === 'left') isLeftEye = true;
-                    if (view.eye === 'right') isRightEye = true;
-                    
-                    // Метод 2: по индексу (fallback)
-                    if (view.eye === 'none' || view.eye === undefined) {
-                        if (i === 0) isLeftEye = true;
-                        if (i === 1) isRightEye = true;
-                    }
-                    
-                    // Устанавливаем видимость объектов
-                    if (isLeftEye) {
-                        // ЛЕВЫЙ ГЛАЗ - показываем КУБ и левую метку
-                        leftCube.visible = true;
-                        rightSphere.visible = false;
-                        debugTextLeft.visible = true;
-                        debugTextRight.visible = false;
-                    } else if (isRightEye) {
-                        // ПРАВЫЙ ГЛАЗ - показываем СФЕРУ и правую метку
-                        leftCube.visible = false;
-                        rightSphere.visible = true;
-                        debugTextLeft.visible = false;
-                        debugTextRight.visible = true;
-                    } else {
-                        // Неизвестный режим - показываем всё
-                        leftCube.visible = true;
-                        rightSphere.visible = true;
-                        debugTextLeft.visible = true;
-                        debugTextRight.visible = true;
-                    }
-                    
-                    renderer.render(scene, camera);
-                }
-                
-                // Логируем сводку каждые 2 секунды
-                if (frameCount % 120 === 0) {
-                    console.log('=== DEBUG INFO ===');
-                    console.log(`Views count: ${debugInfo.viewCount}`);
-                    console.log(`View[0] eye: "${debugInfo.leftEye}"`);
-                    console.log(`View[1] eye: "${debugInfo.rightEye}"`);
-                    console.log('==================');
-                }
-            }
-            
-            // Восстанавливаем видимость
-            leftCube.visible = true;
-            rightSphere.visible = true;
-            debugTextLeft.visible = true;
-            debugTextRight.visible = true;
         }
     </script>
 </body>
