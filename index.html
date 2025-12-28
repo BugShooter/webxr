@@ -103,12 +103,13 @@
         let crosshair;
 
         // Стимулы (разные режимы)
-        let outlineRing;
         let leftRing;
         let rightDot;
         let rightGuideRing;
         let leftHalfRing;
         let rightHalfRing;
+        let leftZigSplit;
+        let rightZigSplit;
 
         // HUD (одна панель)
         let hudPanel;
@@ -131,6 +132,9 @@
 
         const MODES = ['alignment', 'split'];
         let modeIndex = 0;
+
+        const SPLIT_SHAPES = ['vertical', 'horizontal', 'zigzag'];
+        let splitShapeIndex = 0;
 
         let pulseEnabled = false;
         const PULSE_PERIODS = [0.6, 1.0, 1.6, 2.4];
@@ -253,6 +257,10 @@
             return PULSE_PERIODS[pulsePeriodIndex] || 1.0;
         }
 
+        function currentSplitShape() {
+            return SPLIT_SHAPES[splitShapeIndex] || 'vertical';
+        }
+
         function easeOutCubic(t) {
             const x = clamp(t, 0, 1);
             return 1 - Math.pow(1 - x, 3);
@@ -263,9 +271,69 @@
             if (leftRing) leftRing.visible = mode === 'alignment';
             if (rightDot) rightDot.visible = mode === 'alignment';
             if (rightGuideRing) rightGuideRing.visible = mode === 'alignment';
-            if (leftHalfRing) leftHalfRing.visible = mode === 'split';
-            if (rightHalfRing) rightHalfRing.visible = mode === 'split';
-            if (outlineRing) outlineRing.visible = true;
+
+            const splitShape = currentSplitShape();
+            const useZig = mode === 'split' && splitShape === 'zigzag';
+            if (leftHalfRing) leftHalfRing.visible = mode === 'split' && !useZig;
+            if (rightHalfRing) rightHalfRing.visible = mode === 'split' && !useZig;
+            if (leftZigSplit) leftZigSplit.visible = useZig;
+            if (rightZigSplit) rightZigSplit.visible = useZig;
+        }
+
+        function createZigzagSplitTexture(side, outerRadius, innerRadius) {
+            const size = 512;
+            const canvas = document.createElement('canvas');
+            canvas.width = size;
+            canvas.height = size;
+            const ctx = canvas.getContext('2d');
+
+            ctx.clearRect(0, 0, size, size);
+            ctx.translate(size / 2, size / 2);
+            const pxPerUnit = (size * 0.48) / outerRadius;
+            ctx.scale(pxPerUnit, pxPerUnit);
+
+            // Базовая фигура: кольцо (annulus)
+            ctx.fillStyle = '#ff4d4d';
+            ctx.beginPath();
+            ctx.arc(0, 0, outerRadius, 0, Math.PI * 2, false);
+            ctx.arc(0, 0, innerRadius, 0, Math.PI * 2, true);
+            ctx.fill('evenodd');
+
+            // Маска половины с зигзагообразной границей
+            ctx.globalCompositeOperation = 'destination-in';
+            const big = outerRadius * 3;
+            const amp = outerRadius * 0.12;
+            const teeth = 10;
+            const boundary = [];
+            for (let i = 0; i <= teeth; i++) {
+                const y = -outerRadius + (2 * outerRadius * i) / teeth;
+                const x = i % 2 === 0 ? amp : -amp;
+                boundary.push({ x, y });
+            }
+
+            ctx.beginPath();
+            if (side === 'left') {
+                ctx.moveTo(-big, -big);
+                ctx.lineTo(boundary[0].x, boundary[0].y);
+                for (let i = 1; i < boundary.length; i++) ctx.lineTo(boundary[i].x, boundary[i].y);
+                ctx.lineTo(-big, big);
+                ctx.closePath();
+            } else {
+                ctx.moveTo(big, -big);
+                ctx.lineTo(big, big);
+                for (let i = boundary.length - 1; i >= 0; i--) ctx.lineTo(boundary[i].x, boundary[i].y);
+                ctx.closePath();
+            }
+            ctx.fill();
+
+            ctx.globalCompositeOperation = 'source-over';
+
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.minFilter = THREE.LinearFilter;
+            tex.magFilter = THREE.LinearFilter;
+            tex.generateMipmaps = false;
+            tex.needsUpdate = true;
+            return tex;
         }
 
         function getGamepad(session, handednessPreference) {
@@ -335,12 +403,6 @@
             crosshair.add(chV);
             stimulusGroup.add(crosshair);
 
-            // Общий контур (виден обоими глазами)
-            const outlineMat = new THREE.MeshBasicMaterial({ color: 0xaaaaaa, transparent: true, opacity: 0.35 });
-            outlineRing = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.008, 10, 64), outlineMat);
-            outlineRing.layers.set(0);
-            stimulusGroup.add(outlineRing);
-
             // Режим alignment: левый глаз — кольцо, правый — точка в центре
             const RING_RADIUS = 0.14;
             const RING_TUBE = 0.020;
@@ -374,6 +436,27 @@
             rightHalfRing.rotation.z = Math.PI;
             rightHalfRing.layers.set(2);
             stimulusGroup.add(rightHalfRing);
+
+            // Режим split (zigzag): плоские половины с «зубчиками» на границе
+            const outer = RING_RADIUS + RING_TUBE;
+            const inner = RING_RADIUS - RING_TUBE;
+            const zigSize = outer * 2 * 1.05;
+            const zigGeom = new THREE.PlaneGeometry(zigSize, zigSize);
+            const zigLeftTex = createZigzagSplitTexture('left', outer, inner);
+            const zigRightTex = createZigzagSplitTexture('right', outer, inner);
+            leftZigSplit = new THREE.Mesh(
+                zigGeom,
+                new THREE.MeshBasicMaterial({ map: zigLeftTex, transparent: true, opacity: 1.0, side: THREE.DoubleSide })
+            );
+            leftZigSplit.layers.set(1);
+            stimulusGroup.add(leftZigSplit);
+
+            rightZigSplit = new THREE.Mesh(
+                zigGeom,
+                new THREE.MeshBasicMaterial({ map: zigRightTex, transparent: true, opacity: 1.0, side: THREE.DoubleSide })
+            );
+            rightZigSplit.layers.set(2);
+            stimulusGroup.add(rightZigSplit);
 
             applyModeVisibility();
 
@@ -472,14 +555,22 @@
 
             // Лёгкая анимация для заметности
             if (leftRing) leftRing.rotation.z = time * 0.0003;
-            if (leftHalfRing) leftHalfRing.rotation.z = time * 0.0003;
-            if (rightHalfRing) rightHalfRing.rotation.z = Math.PI + time * 0.0003;
+            {
+                const splitRot = currentSplitShape() === 'horizontal' ? Math.PI / 2 : 0;
+                if (leftHalfRing) leftHalfRing.rotation.z = splitRot + time * 0.0003;
+                if (rightHalfRing) rightHalfRing.rotation.z = Math.PI + splitRot + time * 0.0003;
+                if (leftZigSplit) leftZigSplit.rotation.z = time * 0.0003;
+                if (rightZigSplit) rightZigSplit.rotation.z = time * 0.0003;
+            }
 
             // Чтение стиков + кнопок с контроллеров (WebXR Gamepad)
             const session = renderer.xr.getSession();
             if (session && dt > 0) {
                 const gpR = getGamepad(session, 'right');
                 const gpL = getGamepad(session, 'left');
+
+                // общий edge-detect стор
+                if (!animate._prev) animate._prev = { stick: false, a: false, b: false, lstick: false };
 
                 // Правый стик: X — смещение; Y — дистанция
                 if (gpR) {
@@ -508,9 +599,6 @@
                     const pressedA = buttonPressed(gpR, 4);
                     const pressedB = buttonPressed(gpR, 5);
 
-                    // простой edge-detect через window-состояние
-                    if (!animate._prev) animate._prev = { stick: false, a: false, b: false };
-
                     if (pressedStick && !animate._prev.stick) {
                         modeIndex = (modeIndex + 1) % MODES.length;
                         applyModeVisibility();
@@ -535,6 +623,14 @@
                     else if (axes.length >= 2) stickY = axes[1];
                     stickY = deadzone(stickY, 0.12);
                     targetHeight = clamp(targetHeight - stickY * 0.90 * dt, 0.7, 2.2);
+
+                    // 3: нажатие левого стика — смена фигуры split
+                    const pressedLStick = buttonPressed(gpL, 3);
+                    if (pressedLStick && !animate._prev.lstick) {
+                        splitShapeIndex = (splitShapeIndex + 1) % SPLIT_SHAPES.length;
+                        applyModeVisibility();
+                    }
+                    animate._prev.lstick = pressedLStick;
                 }
             }
 
@@ -565,9 +661,11 @@
 
             setOpacityValue(leftRing, leftOpacity);
             setOpacityValue(leftHalfRing, leftOpacity);
+            setOpacityValue(leftZigSplit, leftOpacity);
             setOpacityValue(rightDot, rightOpacity);
             setOpacityValue(rightGuideRing, rightOpacity);
             setOpacityValue(rightHalfRing, rightOpacity);
+            setOpacityValue(rightZigSplit, rightOpacity);
 
             // Обновляем позиции стимулов
             if (stimulusGroup) stimulusGroup.position.set(0, targetHeight, -targetDistance);
@@ -575,20 +673,28 @@
             // Смещение по X (диспаратность)
             if (leftRing) leftRing.position.set(-disparityX / 2, 0, 0);
             if (leftHalfRing) leftHalfRing.position.set(-disparityX / 2, 0, 0);
+            if (leftZigSplit) leftZigSplit.position.set(-disparityX / 2, 0, 0);
             if (rightDot) rightDot.position.set(disparityX / 2, 0, 0);
             if (rightGuideRing) rightGuideRing.position.set(disparityX / 2, 0, 0);
             if (rightHalfRing) rightHalfRing.position.set(disparityX / 2, 0, 0);
-            if (outlineRing) outlineRing.position.set(0, 0, 0);
+            if (rightZigSplit) rightZigSplit.position.set(disparityX / 2, 0, 0);
 
             // HUD обновляем редко (без постоянного пересоздания текстур)
             const nowMs = performance.now();
             const alignedNow = Math.abs(disparityX) <= tolerance;
+
+            // Когда совпало — убираем «теневое» направляющее кольцо, чтобы центр+кольцо сливались
+            const modeNow = currentMode();
+            if (rightGuideRing) rightGuideRing.visible = modeNow === 'alignment' && !alignedNow;
+
             if (hudPanel && nowMs - hudLastUpdateAtMs > 250) {
-                const mode = currentMode();
+                const mode = modeNow;
+                const shape = currentSplitShape();
                 const pulse = pulseEnabled ? `ON (${period.toFixed(1)}s)` : 'OFF';
                 const hint = alignedNow ? 'СОВПАЛО ✅  Нажмите триггер' : 'Совместите и нажмите триггер';
                 const txt =
-                    `Режим: ${mode}   |   Пульсация: ${pulse} (A/B)\n` +
+                    `Режим: ${mode}   |   Split-фигура: ${shape} (нажмите левый стик)\n` +
+                    `Пульсация: ${pulse} (A/B)\n` +
                     `Правый стик: смещение/дистанция   Левый стик: высота\n` +
                     `Dist: ${targetDistance.toFixed(2)}m  Height: ${targetHeight.toFixed(2)}m  |dx|: ${Math.abs(disparityX).toFixed(3)}m\n` +
                     `Счёт: ${score}/${trials}   |   ${hint}`;
