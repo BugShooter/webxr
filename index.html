@@ -88,6 +88,352 @@
         Правый глаз увидит <span style="color: #4ecdc4;">синюю сферу</span></p>
         <button id="startBtn" onclick="startXR()">Запустить VR</button>
         <div id="status">Готово к запуску</div>
+        <div class="version">v3.0 - С отладкой в VR</div>
+    </div>
+    
+    <canvas id="glCanvas"></canvas>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        let scene, camera, renderer;
+        let leftCube, rightSphere;
+        let debugTextLeft, debugTextRight;
+        let xrSession = null;
+        let frameCount = 0;
+        let debugInfo = { leftEye: 'unknown', rightEye: 'unknown', viewCount: 0 };
+        
+        const canvas = document.getElementById('glCanvas');
+        const startBtn = document.getElementById('startBtn');
+        const statusDiv = document.getElementById('status');
+        const container = document.getElementById('container');
+        
+        function log(msg) {
+            console.log(msg);
+            statusDiv.textContent = msg;
+        }
+        
+        // Проверка WebXR
+        if (navigator.xr) {
+            navigator.xr.isSessionSupported('immersive-vr').then(supported => {
+                if (supported) {
+                    log('✅ WebXR поддерживается');
+                } else {
+                    log('❌ VR не поддерживается');
+                    startBtn.disabled = true;
+                }
+            }).catch(err => {
+                log('❌ Ошибка проверки: ' + err.message);
+                startBtn.disabled = true;
+            });
+        } else {
+            log('❌ WebXR недоступен');
+            startBtn.disabled = true;
+        }
+        
+        // Функция создания текста в 3D (поддержка многострочного текста)
+        function createTextSprite(message, backgroundColor) {
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            canvas.width = 512;
+            canvas.height = 256;
+
+            const lines = String(message).split(/\r?\n/);
+
+            // Фон
+            context.fillStyle = backgroundColor;
+            context.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Контрастный цвет текста (если фон белый — рисуем чёрным)
+            const bg = String(backgroundColor).toLowerCase();
+            const textColor = (bg === '#fff' || bg === '#ffffff' || bg === 'white') ? '#000000' : '#ffffff';
+
+            context.textAlign = 'center';
+            context.textBaseline = 'middle';
+            context.fillStyle = textColor;
+
+            // Подбираем размер шрифта, чтобы влезла самая длинная строка
+            const maxTextWidth = canvas.width - 40;
+            let fontSize = 64;
+            while (fontSize >= 22) {
+                context.font = `Bold ${fontSize}px Arial`;
+                const widest = lines.reduce((m, line) => Math.max(m, context.measureText(line).width), 0);
+                if (widest <= maxTextWidth) break;
+                fontSize -= 2;
+            }
+
+            const lineHeight = Math.round(fontSize * 1.1);
+            const totalHeight = lineHeight * lines.length;
+            const startY = (canvas.height - totalHeight) / 2 + lineHeight / 2;
+
+            for (let i = 0; i < lines.length; i++) {
+                context.fillText(lines[i], canvas.width / 2, startY + i * lineHeight);
+            }
+
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.needsUpdate = true;
+            const material = new THREE.SpriteMaterial({ map: texture });
+            const sprite = new THREE.Sprite(material);
+            sprite.scale.set(2, 1, 1);
+
+            return sprite;
+        }
+        
+        // Инициализация сцены
+        function initThreeJS() {
+            log('🔧 Инициализация Three.js...');
+            
+            // Сцена
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0a0a0a);
+            
+            // Камера
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, 1.6, 0);
+            
+            // Рендерер
+            renderer = new THREE.WebGLRenderer({ 
+                canvas: canvas,
+                antialias: true,
+                alpha: false
+            });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.xr.enabled = true;
+            
+            // Освещение
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+            scene.add(ambientLight);
+            
+            const light1 = new THREE.DirectionalLight(0xffffff, 0.8);
+            light1.position.set(2, 3, 2);
+            scene.add(light1);
+            
+            // КРАСНЫЙ КУБ для левого глаза
+            const cubeGeom = new THREE.BoxGeometry(0.6, 0.6, 0.6);
+            const cubeMat = new THREE.MeshStandardMaterial({ 
+                color: 0xff0000,
+                metalness: 0.3,
+                roughness: 0.4,
+                emissive: 0xff0000,
+                emissiveIntensity: 0.5
+            });
+            leftCube = new THREE.Mesh(cubeGeom, cubeMat);
+            leftCube.position.set(0, 1.6, -2.5);
+            leftCube.layers.set(1); // слой 1: левый глаз
+            scene.add(leftCube);
+            
+            // СИНЯЯ СФЕРА для правого глаза
+            const sphereGeom = new THREE.SphereGeometry(0.35, 32, 32);
+            const sphereMat = new THREE.MeshStandardMaterial({ 
+                color: 0x0000ff,
+                metalness: 0.3,
+                roughness: 0.4,
+                emissive: 0x0000ff,
+                emissiveIntensity: 0.5
+            });
+            rightSphere = new THREE.Mesh(sphereGeom, sphereMat);
+            rightSphere.position.set(0, 1.6, -2.5);
+            rightSphere.layers.set(2); // слой 2: правый глаз
+            scene.add(rightSphere);
+            
+            // Текстовые метки для отладки - ЛЕВАЯ
+            debugTextLeft = createTextSprite('LEFT EYE\nКрасный куб', '#ff0000');
+            debugTextLeft.position.set(-1.5, 2.5, -2.5);
+            debugTextLeft.layers.set(1);
+            scene.add(debugTextLeft);
+            
+            // Текстовые метки для отладки - ПРАВАЯ
+            debugTextRight = createTextSprite('RIGHT EYE\nСиняя сфера', '#0000ff');
+            debugTextRight.position.set(1.5, 2.5, -2.5);
+            debugTextRight.layers.set(2);
+            scene.add(debugTextRight);
+            
+            // Информационная панель
+            const infoSprite = createTextSprite('Закройте по очереди\nкаждый глаз', '#ffffff');
+            infoSprite.position.set(0, 2.8, -2.5);
+            infoSprite.scale.set(3, 1.5, 1);
+            infoSprite.layers.set(1);
+            infoSprite.layers.enable(2); // видно обоими глазами
+            scene.add(infoSprite);
+            
+            // Пол
+            const floorGeom = new THREE.PlaneGeometry(10, 10);
+            const floorMat = new THREE.MeshStandardMaterial({ 
+                color: 0x333333,
+                side: THREE.DoubleSide
+            });
+            const floor = new THREE.Mesh(floorGeom, floorMat);
+            floor.rotation.x = -Math.PI / 2;
+            floor.position.y = 0;
+            scene.add(floor);
+            
+            // Сетка
+            const grid = new THREE.GridHelper(10, 20, 0x666666, 0x444444);
+            grid.position.y = 0.01;
+            scene.add(grid);
+            
+            log('✅ Three.js готов');
+        }
+        
+        // Запуск XR
+        async function startXR() {
+            try {
+                log('🚀 Запуск VR...');
+                startBtn.disabled = true;
+                
+                initThreeJS();
+                
+                xrSession = await navigator.xr.requestSession('immersive-vr', {
+                    requiredFeatures: ['local-floor']
+                });
+                
+                log('✅ Сессия создана');
+                
+                await renderer.xr.setSession(xrSession);
+                
+                container.style.display = 'none';
+                
+                log('✅ VR активен!');
+                
+                xrSession.addEventListener('end', () => {
+                    log('VR завершён');
+                    container.style.display = 'block';
+                    startBtn.disabled = false;
+                    xrSession = null;
+                    frameCount = 0;
+                });
+                
+                renderer.setAnimationLoop(animate);
+                
+            } catch (err) {
+                log('❌ Ошибка: ' + err.message);
+                console.error(err);
+                startBtn.disabled = false;
+            }
+        }
+        
+        // Анимация и рендеринг
+        function animate(time) {
+            frameCount++;
+
+            // Анимация объектов
+            leftCube.rotation.x = time * 0.0005;
+            leftCube.rotation.y = time * 0.001;
+            rightSphere.rotation.y = time * 0.001;
+
+            // В WebXR three.js сам рисует оба глаза за один render().
+            // Разделение контента по глазам делаем через layers.
+            const xrCamera = renderer.xr.getCamera(camera);
+            if (xrCamera && xrCamera.isArrayCamera && xrCamera.cameras && xrCamera.cameras.length >= 2) {
+                // Общий слой 0: пол/сетка и т.п.
+                // Левый глаз: слой 1, Правый глаз: слой 2
+                xrCamera.cameras[0].layers.enable(0);
+                xrCamera.cameras[0].layers.enable(1);
+                xrCamera.cameras[0].layers.disable(2);
+
+                xrCamera.cameras[1].layers.enable(0);
+                xrCamera.cameras[1].layers.enable(2);
+                xrCamera.cameras[1].layers.disable(1);
+
+                if (frameCount % 120 === 0) {
+                    console.log(`XR cameras: ${xrCamera.cameras.length} (layers L=${xrCamera.cameras[0].layers.mask} R=${xrCamera.cameras[1].layers.mask})`);
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html><!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebXR Stereo Rendering</title>
+    <style>
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        #container {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            max-width: 90%;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 30px;
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+            z-index: 100;
+        }
+        
+        h1 {
+            margin: 0 0 15px 0;
+            font-size: 1.8em;
+        }
+        
+        p {
+            margin: 0 0 25px 0;
+            opacity: 0.9;
+            line-height: 1.5;
+        }
+        
+        button {
+            background: white;
+            color: #667eea;
+            border: none;
+            padding: 18px 45px;
+            font-size: 20px;
+            font-weight: bold;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        }
+        
+        button:active {
+            transform: scale(0.95);
+        }
+        
+        button:disabled {
+            background: #ccc;
+            color: #666;
+            cursor: not-allowed;
+        }
+        
+        #status {
+            margin-top: 20px;
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 10px;
+            font-size: 15px;
+        }
+        
+        .version {
+            margin-top: 15px;
+            font-size: 12px;
+            opacity: 0.7;
+        }
+        
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <h1>🥽 WebXR Стерео v2</h1>
+        <p>Левый глаз увидит <span style="color: #ff6b6b;">красный куб</span><br>
+        Правый глаз увидит <span style="color: #4ecdc4;">синюю сферу</span></p>
+        <button id="startBtn" onclick="startXR()">Запустить VR</button>
+        <div id="status">Готово к запуску</div>
         <div class="version">v2.0 - С отладкой в VR</div>
     </div>
     
