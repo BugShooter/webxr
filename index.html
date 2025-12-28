@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>WebXR Simple Demo</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: system-ui, -apple-system, sans-serif;
+            background: #1a1a1a;
+            color: #fff;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #4a9eff;
+        }
+        .info {
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        #enterVRButton {
+            background: #4a9eff;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 18px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 20px 0;
+        }
+        #enterVRButton:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+        #enterVRButton:hover:not(:disabled) {
+            background: #3a8eef;
+        }
+        #status {
+            background: #2a2a2a;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+            font-family: monospace;
+        }
+        canvas {
+            width: 100%;
+            max-width: 600px;
+            height: 400px;
+            border: 2px solid #4a9eff;
+            border-radius: 5px;
+            display: block;
+            margin: 20px auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>WebXR Simple Demo</h1>
+        
+        <div class="info">
+            <p><strong>Примечание:</strong> Это упрощённая демонстрация WebXR API.</p>
+            <p>Для работы требуется:</p>
+            <ul>
+                <li>Браузер с поддержкой WebXR (Chrome, Edge, Firefox)</li>
+                <li>VR устройство (Quest 3, Quest 2, и т.д.)</li>
+                <li>HTTPS соединение (в Claude.ai не всегда доступно)</li>
+            </ul>
+        </div>
+
+        <button id="enterVRButton" disabled>Проверка WebXR...</button>
+        
+        <div id="status">Статус: Инициализация...</div>
+
+        <canvas id="glCanvas"></canvas>
+    </div>
+
+    <script>
+        const button = document.getElementById('enterVRButton');
+        const status = document.getElementById('status');
+        const canvas = document.getElementById('glCanvas');
+        
+        let xrSession = null;
+        let gl = null;
+        let xrRefSpace = null;
+
+        // Инициализация WebGL
+        function initWebGL() {
+            gl = canvas.getContext('webgl', { xrCompatible: true });
+            if (!gl) {
+                updateStatus('WebGL не поддерживается');
+                return false;
+            }
+            
+            // Простая сцена для демонстрации
+            gl.clearColor(0.1, 0.1, 0.2, 1.0);
+            gl.enable(gl.DEPTH_TEST);
+            
+            return true;
+        }
+
+        // Обновление статуса
+        function updateStatus(message) {
+            status.textContent = 'Статус: ' + message;
+        }
+
+        // Проверка WebXR
+        async function checkWebXR() {
+            updateStatus('Проверка WebXR API...');
+            
+            if (!navigator.xr) {
+                button.textContent = 'WebXR не поддерживается';
+                updateStatus('WebXR API недоступен в этом браузере');
+                return;
+            }
+
+            try {
+                const supported = await navigator.xr.isSessionSupported('immersive-vr');
+                if (supported) {
+                    button.textContent = 'Войти в VR';
+                    button.disabled = false;
+                    updateStatus('WebXR поддерживается! Готов к запуску.');
+                } else {
+                    button.textContent = 'VR режим недоступен';
+                    updateStatus('Immersive-VR сессии не поддерживаются');
+                }
+            } catch (err) {
+                button.textContent = 'Ошибка проверки VR';
+                updateStatus('Ошибка: ' + err.message);
+            }
+        }
+
+        // Запуск VR сессии
+        async function startVRSession() {
+            if (xrSession) {
+                await xrSession.end();
+                return;
+            }
+
+            try {
+                updateStatus('Запуск VR сессии...');
+                xrSession = await navigator.xr.requestSession('immersive-vr');
+                
+                button.textContent = 'Выйти из VR';
+                updateStatus('VR сессия активна');
+
+                // Настройка WebGL слоя
+                const glLayer = new XRWebGLLayer(xrSession, gl);
+                await xrSession.updateRenderState({ baseLayer: glLayer });
+
+                // Получение reference space
+                xrRefSpace = await xrSession.requestReferenceSpace('local');
+
+                // Обработчик завершения сессии
+                xrSession.addEventListener('end', onSessionEnd);
+
+                // Запуск цикла рендеринга
+                xrSession.requestAnimationFrame(onXRFrame);
+
+            } catch (err) {
+                updateStatus('Ошибка запуска VR: ' + err.message);
+                console.error(err);
+            }
+        }
+
+        // Завершение сессии
+        function onSessionEnd() {
+            xrSession = null;
+            button.textContent = 'Войти в VR';
+            updateStatus('VR сессия завершена');
+        }
+
+        // Цикл рендеринга VR
+        function onXRFrame(time, frame) {
+            const session = frame.session;
+            session.requestAnimationFrame(onXRFrame);
+
+            const pose = frame.getViewerPose(xrRefSpace);
+            if (pose) {
+                const glLayer = session.renderState.baseLayer;
+                gl.bindFramebuffer(gl.FRAMEBUFFER, glLayer.framebuffer);
+
+                // Очистка с анимированным цветом
+                const hue = (time / 10) % 360;
+                const r = Math.sin(hue * Math.PI / 180) * 0.5 + 0.5;
+                const g = Math.sin((hue + 120) * Math.PI / 180) * 0.5 + 0.5;
+                const b = Math.sin((hue + 240) * Math.PI / 180) * 0.5 + 0.5;
+                
+                gl.clearColor(r * 0.3, g * 0.3, b * 0.3, 1.0);
+                gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+                // Рендеринг для каждого глаза
+                for (const view of pose.views) {
+                    const viewport = glLayer.getViewport(view);
+                    gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
+                    
+                    // Здесь должен быть рендеринг 3D сцены
+                    // В упрощённой версии просто показываем цвет
+                }
+            }
+        }
+
+        // Обработчик кнопки
+        button.addEventListener('click', startVRSession);
+
+        // Инициализация
+        if (initWebGL()) {
+            checkWebXR();
+        } else {
+            updateStatus('Не удалось инициализировать WebGL');
+        }
+
+        // Простой рендеринг в canvas для превью
+        function render2D() {
+            if (!gl || xrSession) return;
+            
+            const time = Date.now() / 1000;
+            const hue = (time * 30) % 360;
+            const r = Math.sin(hue * Math.PI / 180) * 0.5 + 0.5;
+            const g = Math.sin((hue + 120) * Math.PI / 180) * 0.5 + 0.5;
+            const b = Math.sin((hue + 240) * Math.PI / 180) * 0.5 + 0.5;
+            
+            gl.clearColor(r * 0.3, g * 0.3, b * 0.3, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+            
+            requestAnimationFrame(render2D);
+        }
+        
+        render2D();
+    </script>
+</body>
+</html>
