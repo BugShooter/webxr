@@ -99,21 +99,41 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script>
         let scene, camera, renderer;
-        let leftMarker, rightMarker;
-        let hudInfoSprite, hudFeedbackSprite;
+        let stimulusGroup;
         let crosshair;
+
+        // Стимулы (разные режимы)
+        let outlineRing;
+        let leftRing;
+        let rightDot;
+        let leftHalfRing;
+        let rightHalfRing;
+
+        // HUD (одна панель)
+        let hudPanel;
+        let hudLastText = '';
+        let hudLastBg = '';
+        let hudLastUpdateAtMs = 0;
         let xrSession = null;
         let frameCount = 0;
         let debugInfo = { leftEye: 'unknown', rightEye: 'unknown', viewCount: 0 };
 
         // Параметры тренажёра
         let targetDistance = 2.0; // метры до плоскости стимулов
+        let targetHeight = 1.6; // высота стимула (сидя/стоя)
         let disparityX = 0.25; // текущее смещение (м)
         let tolerance = 0.015; // порог совпадения (м)
         let score = 0;
         let trials = 0;
         let lastTimeMs = 0;
         let lastSelectAtMs = -1e9;
+
+        const MODES = ['alignment', 'split'];
+        let modeIndex = 0;
+
+        let pulseEnabled = false;
+        const PULSE_PERIODS = [0.6, 1.0, 1.6, 2.4];
+        let pulsePeriodIndex = 1;
         
         const canvas = document.getElementById('glCanvas');
         const startBtn = document.getElementById('startBtn');
@@ -146,8 +166,8 @@
         function createTextTexture(message, backgroundColor) {
             const canvas = document.createElement('canvas');
             const context = canvas.getContext('2d');
-            canvas.width = 512;
-            canvas.height = 256;
+            canvas.width = 1024;
+            canvas.height = 512;
 
             const lines = String(message).split(/\r?\n/);
 
@@ -186,21 +206,27 @@
             return texture;
         }
 
-        // Функция создания текста в 3D (поддержка многострочного текста)
-        function createTextSprite(message, backgroundColor) {
+        function createHudPanel(message, backgroundColor) {
             const texture = createTextTexture(message, backgroundColor);
-            const material = new THREE.SpriteMaterial({ map: texture });
-            const sprite = new THREE.Sprite(material);
-            sprite.scale.set(2, 1, 1);
-            return sprite;
+            const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+            material.depthTest = false;
+            const geometry = new THREE.PlaneGeometry(1.60, 0.70);
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.renderOrder = 999;
+            mesh.layers.set(1);
+            mesh.layers.enable(2); // видно обоими глазами
+            return mesh;
         }
 
-        function updateTextSprite(sprite, message, backgroundColor) {
-            if (!sprite || !sprite.material) return;
-            const oldMap = sprite.material.map;
-            sprite.material.map = createTextTexture(message, backgroundColor);
-            sprite.material.needsUpdate = true;
+        function updateHudPanel(mesh, message, backgroundColor) {
+            if (!mesh || !mesh.material) return;
+            if (message === hudLastText && backgroundColor === hudLastBg) return;
+            const oldMap = mesh.material.map;
+            mesh.material.map = createTextTexture(message, backgroundColor);
+            mesh.material.needsUpdate = true;
             if (oldMap) oldMap.dispose();
+            hudLastText = message;
+            hudLastBg = backgroundColor;
         }
 
         function clamp(v, min, max) {
@@ -216,6 +242,47 @@
             const sign = Math.random() < 0.5 ? -1 : 1;
             disparityX = mag * sign;
             trials++;
+        }
+
+        function currentMode() {
+            return MODES[modeIndex] || 'alignment';
+        }
+
+        function pulsePeriodSeconds() {
+            return PULSE_PERIODS[pulsePeriodIndex] || 1.0;
+        }
+
+        function applyModeVisibility() {
+            const mode = currentMode();
+            if (leftRing) leftRing.visible = mode === 'alignment';
+            if (rightDot) rightDot.visible = mode === 'alignment';
+            if (leftHalfRing) leftHalfRing.visible = mode === 'split';
+            if (rightHalfRing) rightHalfRing.visible = mode === 'split';
+            if (outlineRing) outlineRing.visible = true;
+        }
+
+        function getGamepad(session, handednessPreference) {
+            if (!session) return null;
+            // Сначала пробуем строго по handedness
+            for (const src of session.inputSources) {
+                if (!src || !src.gamepad) continue;
+                if (src.handedness === handednessPreference) return src.gamepad;
+            }
+            // Потом "none" или любой
+            for (const src of session.inputSources) {
+                if (!src || !src.gamepad) continue;
+                if (src.handedness === 'none') return src.gamepad;
+            }
+            for (const src of session.inputSources) {
+                if (!src || !src.gamepad) continue;
+                return src.gamepad;
+            }
+            return null;
+        }
+
+        function buttonPressed(gamepad, index) {
+            const b = gamepad?.buttons?.[index];
+            return !!(b && (b.pressed || b.value > 0.8));
         }
         
         // Инициализация сцены
@@ -248,6 +315,9 @@
             light1.position.set(2, 3, 2);
             scene.add(light1);
 
+            stimulusGroup = new THREE.Group();
+            scene.add(stimulusGroup);
+
             // Крест фиксации (виден обоими глазами)
             crosshair = new THREE.Group();
             crosshair.layers.set(0);
@@ -256,38 +326,43 @@
             const chV = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.20, 0.01), chMat);
             crosshair.add(chH);
             crosshair.add(chV);
-            crosshair.position.set(0, 1.6, -targetDistance);
-            scene.add(crosshair);
+            stimulusGroup.add(crosshair);
 
-            // Маркеры для разных глаз
-            const markerGeom = new THREE.SphereGeometry(0.035, 24, 24);
-            const leftMat = new THREE.MeshStandardMaterial({ color: 0xff4d4d, emissive: 0xff0000, emissiveIntensity: 0.4 });
-            const rightMat = new THREE.MeshStandardMaterial({ color: 0x4d7dff, emissive: 0x0000ff, emissiveIntensity: 0.4 });
+            // Общий контур (виден обоими глазами)
+            const outlineMat = new THREE.MeshBasicMaterial({ color: 0xaaaaaa, transparent: true, opacity: 0.35 });
+            outlineRing = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.008, 10, 64), outlineMat);
+            outlineRing.layers.set(0);
+            stimulusGroup.add(outlineRing);
 
-            leftMarker = new THREE.Mesh(markerGeom, leftMat);
-            leftMarker.layers.set(1); // левый глаз
-            leftMarker.position.set(-disparityX / 2, 1.6, -targetDistance);
-            scene.add(leftMarker);
+            // Режим alignment: левый глаз — кольцо, правый — точка в центре
+            const ringMatLeft = new THREE.MeshStandardMaterial({ color: 0xff4d4d, emissive: 0xff0000, emissiveIntensity: 0.25, transparent: true, opacity: 1.0 });
+            leftRing = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.020, 12, 64), ringMatLeft);
+            leftRing.layers.set(1);
+            stimulusGroup.add(leftRing);
 
-            rightMarker = new THREE.Mesh(markerGeom, rightMat);
-            rightMarker.layers.set(2); // правый глаз
-            rightMarker.position.set(disparityX / 2, 1.6, -targetDistance);
-            scene.add(rightMarker);
+            const dotMatRight = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x4040ff, emissiveIntensity: 0.15, transparent: true, opacity: 1.0 });
+            rightDot = new THREE.Mesh(new THREE.SphereGeometry(0.020, 20, 20), dotMatRight);
+            rightDot.layers.set(2);
+            stimulusGroup.add(rightDot);
 
-            // HUD в VR (виден обоими глазами)
-            hudInfoSprite = createTextSprite('Стик: X=смещение, Y=дистанция\nТриггер: подтвердить', '#222222');
-            hudInfoSprite.position.set(0, 2.55, -1.7);
-            hudInfoSprite.scale.set(3.2, 1.2, 1);
-            hudInfoSprite.layers.set(1);
-            hudInfoSprite.layers.enable(2);
-            scene.add(hudInfoSprite);
+            // Режим split: половинки одного кольца в разные глаза
+            const halfMatLeft = new THREE.MeshStandardMaterial({ color: 0xff4d4d, emissive: 0xff0000, emissiveIntensity: 0.20, transparent: true, opacity: 1.0 });
+            leftHalfRing = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.020, 12, 64, Math.PI), halfMatLeft);
+            leftHalfRing.layers.set(1);
+            stimulusGroup.add(leftHalfRing);
 
-            hudFeedbackSprite = createTextSprite('...', '#222222');
-            hudFeedbackSprite.position.set(0, 2.15, -1.7);
-            hudFeedbackSprite.scale.set(2.6, 0.9, 1);
-            hudFeedbackSprite.layers.set(1);
-            hudFeedbackSprite.layers.enable(2);
-            scene.add(hudFeedbackSprite);
+            const halfMatRight = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x4040ff, emissiveIntensity: 0.10, transparent: true, opacity: 1.0 });
+            rightHalfRing = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.020, 12, 64, Math.PI), halfMatRight);
+            rightHalfRing.rotation.z = Math.PI;
+            rightHalfRing.layers.set(2);
+            stimulusGroup.add(rightHalfRing);
+
+            applyModeVisibility();
+
+            // HUD в VR: одна панель подальше, крупнее, без billboard
+            hudPanel = createHudPanel('...', '#222222');
+            hudPanel.position.set(0, 2.2, -2.3);
+            scene.add(hudPanel);
             
             // Пол
             const floorGeom = new THREE.PlaneGeometry(10, 10);
@@ -316,11 +391,9 @@
 
                 const aligned = Math.abs(disparityX) <= tolerance;
                 if (aligned) score++;
-                updateTextSprite(
-                    hudFeedbackSprite,
-                    aligned ? 'OK ✅\nСледующий раунд' : 'Не совпало ❌\nПопробуйте ещё',
-                    aligned ? '#1f7a3a' : '#7a1f1f'
-                );
+                const bg = aligned ? '#1f7a3a' : '#7a1f1f';
+                const txt = aligned ? 'OK ✅  Следующий раунд' : 'Не совпало ❌  Попробуйте ещё';
+                updateHudPanel(hudPanel, txt, bg);
 
                 // новый раунд (и при успехе, и при ошибке — чтобы было движение)
                 randomizeTrial();
@@ -379,28 +452,22 @@
             const dt = lastTimeMs ? (time - lastTimeMs) / 1000 : 0;
             lastTimeMs = time;
 
-            // Вращаем маркеры слегка, чтобы были "живыми"
-            if (leftMarker) {
-                leftMarker.rotation.y = time * 0.001;
-                leftMarker.rotation.x = time * 0.0005;
-            }
-            if (rightMarker) {
-                rightMarker.rotation.y = time * 0.001;
-            }
+            // Лёгкая анимация для заметности
+            if (leftRing) leftRing.rotation.z = time * 0.0003;
+            if (leftHalfRing) leftHalfRing.rotation.z = time * 0.0003;
+            if (rightHalfRing) rightHalfRing.rotation.z = Math.PI + time * 0.0003;
 
-            // Чтение стика с контроллеров (WebXR Gamepad)
+            // Чтение стиков + кнопок с контроллеров (WebXR Gamepad)
             const session = renderer.xr.getSession();
             if (session && dt > 0) {
-                let stickX = 0;
-                let stickY = 0;
+                const gpR = getGamepad(session, 'right');
+                const gpL = getGamepad(session, 'left');
 
-                for (const src of session.inputSources) {
-                    if (!src || !src.gamepad) continue;
-                    // предпочитаем правый, но если нет — берём любой
-                    if (src.handedness && src.handedness !== 'right' && src.handedness !== 'none') continue;
-
-                    const axes = src.gamepad.axes || [];
-                    // Oculus Touch обычно: axes[2]=x, axes[3]=y; но встречается и [0],[1]
+                // Правый стик: X — смещение; Y — дистанция
+                if (gpR) {
+                    const axes = gpR.axes || [];
+                    let stickX = 0;
+                    let stickY = 0;
                     if (axes.length >= 4) {
                         stickX = axes[2];
                         stickY = axes[3];
@@ -408,37 +475,93 @@
                         stickX = axes[0];
                         stickY = axes[1];
                     }
-                    break;
+
+                    stickX = deadzone(stickX, 0.12);
+                    stickY = deadzone(stickY, 0.12);
+
+                    disparityX = clamp(disparityX + stickX * 0.60 * dt, -0.6, 0.6);
+                    targetDistance = clamp(targetDistance - stickY * 0.90 * dt, 0.6, 4.0);
+
+                    // Кнопки (приблизительное соответствие Oculus Touch)
+                    // 3: нажатие стика — смена режима
+                    // 4: A — пульсация on/off
+                    // 5: B — смена периода пульсации
+                    const pressedStick = buttonPressed(gpR, 3);
+                    const pressedA = buttonPressed(gpR, 4);
+                    const pressedB = buttonPressed(gpR, 5);
+
+                    // простой edge-detect через window-состояние
+                    if (!animate._prev) animate._prev = { stick: false, a: false, b: false };
+
+                    if (pressedStick && !animate._prev.stick) {
+                        modeIndex = (modeIndex + 1) % MODES.length;
+                        applyModeVisibility();
+                    }
+                    if (pressedA && !animate._prev.a) {
+                        pulseEnabled = !pulseEnabled;
+                    }
+                    if (pressedB && !animate._prev.b) {
+                        pulsePeriodIndex = (pulsePeriodIndex + 1) % PULSE_PERIODS.length;
+                    }
+
+                    animate._prev.stick = pressedStick;
+                    animate._prev.a = pressedA;
+                    animate._prev.b = pressedB;
                 }
 
-                stickX = deadzone(stickX, 0.12);
-                stickY = deadzone(stickY, 0.12);
-
-                // Управление: X — смещение; Y — дистанция (вверх = ближе)
-                disparityX = clamp(disparityX + stickX * 0.60 * dt, -0.6, 0.6);
-                targetDistance = clamp(targetDistance - stickY * 0.90 * dt, 0.6, 4.0);
+                // Левый стик: Y — высота (сидя/стоя)
+                if (gpL) {
+                    const axes = gpL.axes || [];
+                    let stickY = 0;
+                    if (axes.length >= 4) stickY = axes[3];
+                    else if (axes.length >= 2) stickY = axes[1];
+                    stickY = deadzone(stickY, 0.12);
+                    targetHeight = clamp(targetHeight - stickY * 0.90 * dt, 0.7, 2.2);
+                }
             }
+
+            // Пульсация (по очереди подсвечиваем глаза)
+            const period = pulsePeriodSeconds();
+            const phase = pulseEnabled ? (Math.floor((time / 1000) / (period / 2)) % 2) : -1;
+            const leftActive = !pulseEnabled || phase === 0;
+            const rightActive = !pulseEnabled || phase === 1;
+
+            const setOpacity = (mesh, on) => {
+                if (!mesh || !mesh.material) return;
+                mesh.material.opacity = on ? 1.0 : 0.15;
+                mesh.material.transparent = true;
+                mesh.material.needsUpdate = true;
+            };
+
+            setOpacity(leftRing, leftActive);
+            setOpacity(leftHalfRing, leftActive);
+            setOpacity(rightDot, rightActive);
+            setOpacity(rightHalfRing, rightActive);
 
             // Обновляем позиции стимулов
-            if (crosshair) crosshair.position.set(0, 1.6, -targetDistance);
-            if (leftMarker) leftMarker.position.set(-disparityX / 2, 1.6, -targetDistance);
-            if (rightMarker) rightMarker.position.set(disparityX / 2, 1.6, -targetDistance);
+            if (stimulusGroup) stimulusGroup.position.set(0, targetHeight, -targetDistance);
 
-            // Живой статус
+            // Смещение по X (диспаратность)
+            if (leftRing) leftRing.position.set(-disparityX / 2, 0, 0);
+            if (leftHalfRing) leftHalfRing.position.set(-disparityX / 2, 0, 0);
+            if (rightDot) rightDot.position.set(disparityX / 2, 0, 0);
+            if (rightHalfRing) rightHalfRing.position.set(disparityX / 2, 0, 0);
+            if (outlineRing) outlineRing.position.set(0, 0, 0);
+
+            // HUD обновляем редко (без постоянного пересоздания текстур)
+            const nowMs = performance.now();
             const alignedNow = Math.abs(disparityX) <= tolerance;
-            if (hudInfoSprite && frameCount % 10 === 0) {
-                updateTextSprite(
-                    hudInfoSprite,
-                    `Стик: X=смещение, Y=дистанция\nДистанция: ${targetDistance.toFixed(2)} м  |  |смещение|: ${Math.abs(disparityX).toFixed(3)} м\nСчёт: ${score}/${trials}`,
-                    '#222222'
-                );
-            }
-            if (hudFeedbackSprite && frameCount % 10 === 0) {
-                updateTextSprite(
-                    hudFeedbackSprite,
-                    alignedNow ? 'СЕЙЧАС СОВПАЛО ✅\nНажмите триггер' : 'Совместите точки\nи нажмите триггер',
-                    alignedNow ? '#1f7a3a' : '#222222'
-                );
+            if (hudPanel && nowMs - hudLastUpdateAtMs > 250) {
+                const mode = currentMode();
+                const pulse = pulseEnabled ? `ON (${period.toFixed(1)}s)` : 'OFF';
+                const hint = alignedNow ? 'СОВПАЛО ✅  Нажмите триггер' : 'Совместите и нажмите триггер';
+                const txt =
+                    `Режим: ${mode}   |   Пульсация: ${pulse} (A/B)\n` +
+                    `Правый стик: смещение/дистанция   Левый стик: высота\n` +
+                    `Dist: ${targetDistance.toFixed(2)}m  Height: ${targetHeight.toFixed(2)}m  |dx|: ${Math.abs(disparityX).toFixed(3)}m\n` +
+                    `Счёт: ${score}/${trials}   |   ${hint}`;
+                updateHudPanel(hudPanel, txt, alignedNow ? '#1f7a3a' : '#222222');
+                hudLastUpdateAtMs = nowMs;
             }
 
             // В WebXR three.js сам рисует оба глаза за один render().
