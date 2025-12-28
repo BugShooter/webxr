@@ -106,6 +106,7 @@
         let outlineRing;
         let leftRing;
         let rightDot;
+        let rightGuideRing;
         let leftHalfRing;
         let rightHalfRing;
 
@@ -252,10 +253,16 @@
             return PULSE_PERIODS[pulsePeriodIndex] || 1.0;
         }
 
+        function easeOutCubic(t) {
+            const x = clamp(t, 0, 1);
+            return 1 - Math.pow(1 - x, 3);
+        }
+
         function applyModeVisibility() {
             const mode = currentMode();
             if (leftRing) leftRing.visible = mode === 'alignment';
             if (rightDot) rightDot.visible = mode === 'alignment';
+            if (rightGuideRing) rightGuideRing.visible = mode === 'alignment';
             if (leftHalfRing) leftHalfRing.visible = mode === 'split';
             if (rightHalfRing) rightHalfRing.visible = mode === 'split';
             if (outlineRing) outlineRing.visible = true;
@@ -335,15 +342,26 @@
             stimulusGroup.add(outlineRing);
 
             // Режим alignment: левый глаз — кольцо, правый — точка в центре
+            const RING_RADIUS = 0.14;
+            const RING_TUBE = 0.020;
+            const RING_INNER_RADIUS = RING_RADIUS - RING_TUBE;
+
             const ringMatLeft = new THREE.MeshStandardMaterial({ color: 0xff4d4d, emissive: 0xff0000, emissiveIntensity: 0.25, transparent: true, opacity: 1.0 });
-            leftRing = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.020, 12, 64), ringMatLeft);
+            leftRing = new THREE.Mesh(new THREE.TorusGeometry(RING_RADIUS, RING_TUBE, 12, 64), ringMatLeft);
             leftRing.layers.set(1);
             stimulusGroup.add(leftRing);
 
-            const dotMatRight = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x4040ff, emissiveIntensity: 0.15, transparent: true, opacity: 1.0 });
-            rightDot = new THREE.Mesh(new THREE.SphereGeometry(0.020, 20, 20), dotMatRight);
+            // Правый глаз: красный диск диаметром как внутренняя часть кольца
+            const dotMatRight = new THREE.MeshBasicMaterial({ color: 0xff4d4d, transparent: true, opacity: 1.0, side: THREE.DoubleSide });
+            rightDot = new THREE.Mesh(new THREE.CircleGeometry(RING_INNER_RADIUS, 48), dotMatRight);
             rightDot.layers.set(2);
             stimulusGroup.add(rightDot);
+
+            // Вокруг диска — серое полупрозрачное кольцо (правый глаз)
+            const guideMat = new THREE.MeshBasicMaterial({ color: 0xaaaaaa, transparent: true, opacity: 0.35 });
+            rightGuideRing = new THREE.Mesh(new THREE.TorusGeometry(RING_RADIUS, 0.008, 10, 64), guideMat);
+            rightGuideRing.layers.set(2);
+            stimulusGroup.add(rightGuideRing);
 
             // Режим split: половинки одного кольца в разные глаза
             const halfMatLeft = new THREE.MeshStandardMaterial({ color: 0xff4d4d, emissive: 0xff0000, emissiveIntensity: 0.20, transparent: true, opacity: 1.0 });
@@ -522,9 +540,14 @@
 
             // Пульсация (по очереди подсвечиваем глаза)
             const period = pulsePeriodSeconds();
-            const phase = pulseEnabled ? (Math.floor((time / 1000) / (period / 2)) % 2) : -1;
-            const leftActive = !pulseEnabled || phase === 0;
-            const rightActive = !pulseEnabled || phase === 1;
+            const halfPeriod = period / 2;
+            const tSec = time / 1000;
+            const phaseIndex = pulseEnabled ? (Math.floor(tSec / halfPeriod) % 2) : -1;
+            const localT = pulseEnabled ? ((tSec % halfPeriod) / halfPeriod) : 0;
+            // Резкое падение в начале + плавное восстановление
+            const pulseAlpha = pulseEnabled ? (0.05 + 0.95 * easeOutCubic(localT)) : 1.0;
+            const leftOpacity = !pulseEnabled ? 1.0 : (phaseIndex === 0 ? pulseAlpha : 1.0);
+            const rightOpacity = !pulseEnabled ? 1.0 : (phaseIndex === 1 ? pulseAlpha : 1.0);
 
             const setOpacity = (mesh, on) => {
                 if (!mesh || !mesh.material) return;
@@ -533,10 +556,18 @@
                 mesh.material.needsUpdate = true;
             };
 
-            setOpacity(leftRing, leftActive);
-            setOpacity(leftHalfRing, leftActive);
-            setOpacity(rightDot, rightActive);
-            setOpacity(rightHalfRing, rightActive);
+            const setOpacityValue = (mesh, opacity) => {
+                if (!mesh || !mesh.material) return;
+                mesh.material.opacity = opacity;
+                mesh.material.transparent = opacity < 1.0;
+                mesh.material.needsUpdate = true;
+            };
+
+            setOpacityValue(leftRing, leftOpacity);
+            setOpacityValue(leftHalfRing, leftOpacity);
+            setOpacityValue(rightDot, rightOpacity);
+            setOpacityValue(rightGuideRing, rightOpacity);
+            setOpacityValue(rightHalfRing, rightOpacity);
 
             // Обновляем позиции стимулов
             if (stimulusGroup) stimulusGroup.position.set(0, targetHeight, -targetDistance);
@@ -545,6 +576,7 @@
             if (leftRing) leftRing.position.set(-disparityX / 2, 0, 0);
             if (leftHalfRing) leftHalfRing.position.set(-disparityX / 2, 0, 0);
             if (rightDot) rightDot.position.set(disparityX / 2, 0, 0);
+            if (rightGuideRing) rightGuideRing.position.set(disparityX / 2, 0, 0);
             if (rightHalfRing) rightHalfRing.position.set(disparityX / 2, 0, 0);
             if (outlineRing) outlineRing.position.set(0, 0, 0);
 
