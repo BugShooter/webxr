@@ -32,6 +32,10 @@
 
         let rotationEnabled = false;
 
+        let motionSeed = Math.random() * 1000;
+        let baseOffsetX = 0;
+        let baseOffsetY = 0;
+
         let caught = 0;
         let alignedTimeSec = 0;
         let lastTimeMs = 0;
@@ -39,6 +43,16 @@
 
         function pulsePeriodSeconds() {
           return PULSE_PERIODS[pulsePeriodIndex] || 1.0;
+        }
+
+        function respawnTarget() {
+          const mag = 0.08 + Math.random() * 0.3;
+          const sign = Math.random() < 0.5 ? -1 : 1;
+          disparityX = mag * sign;
+
+          motionSeed = Math.random() * 1000;
+          baseOffsetX = (Math.random() * 2 - 1) * 0.12;
+          baseOffsetY = (Math.random() * 2 - 1) * 0.06;
         }
 
         function initThreeJS() {
@@ -130,6 +144,7 @@
             const aligned = Math.abs(disparityX) <= tolerance;
             if (aligned) {
               caught++;
+              respawnTarget();
               Base.updateHudPanel(THREE, hudState, hudPanel, 'Поймал ✅', '#1f7a3a');
             } else {
               Base.updateHudPanel(THREE, hudState, hudPanel, 'Не совпало ❌', '#7a1f1f');
@@ -201,9 +216,9 @@
           }
 
           // Motion path (bat flying)
-          const t = time / 1000;
-          const pathX = 0.22 * Math.sin(t * 0.9);
-          const pathY = 0.10 * Math.sin(t * 1.3 + 1.1);
+          const t = time / 1000 + motionSeed;
+          const pathX = baseOffsetX + 0.22 * Math.sin(t * 0.9);
+          const pathY = baseOffsetY + 0.10 * Math.sin(t * 1.3 + 1.1);
 
           if (stimulusGroup) stimulusGroup.position.set(pathX, targetHeight + pathY, -targetDistance);
 
