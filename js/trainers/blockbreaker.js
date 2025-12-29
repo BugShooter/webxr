@@ -19,6 +19,7 @@
         // Board placement
         let boardDistance = 2.2;
         let boardHeight = 1.55;
+        let boardScale = 1.0;
 
         // Controls
         const PULSE_PERIODS = [0.6, 1.0, 1.6, 2.4];
@@ -336,7 +337,8 @@
           resetBall(true);
 
           hudPanel = Base.createHudPanel(THREE, '...', '#222222');
-          hudPanel.position.set(0, 2.25, -2.3);
+          hudPanel.position.set(0, 2.45, -2.85);
+          hudPanel.rotation.x = 0.25;
           scene.add(hudPanel);
 
           // Controllers: trigger serve; A/B pulse; X preset; Y block program
@@ -465,11 +467,20 @@
 
             if (gpR) {
               const axes = gpR.axes || [];
+              let stickX = 0;
               let stickY = 0;
-              if (axes.length >= 4) stickY = axes[3];
-              else if (axes.length >= 2) stickY = axes[1];
+              if (axes.length >= 4) {
+                stickX = axes[2];
+                stickY = axes[3];
+              } else if (axes.length >= 2) {
+                stickX = axes[0];
+                stickY = axes[1];
+              }
+              stickX = Base.deadzone(stickX, 0.12);
               stickY = Base.deadzone(stickY, 0.12);
+
               boardDistance = Base.clamp(boardDistance - stickY * 0.9 * dt, 0.9, 4.0);
+              boardScale = Base.clamp(boardScale + stickX * 0.9 * dt, 0.6, 2.2);
 
               const pressedA = Base.buttonPressed(gpR, 4);
               const pressedB = Base.buttonPressed(gpR, 5);
@@ -483,7 +494,10 @@
           updatePaddleMeshWidth();
 
           // Update board placement
-          if (boardGroup) boardGroup.position.set(0, boardHeight, -boardDistance);
+          if (boardGroup) {
+            boardGroup.position.set(0, boardHeight, -boardDistance);
+            boardGroup.scale.setScalar(boardScale);
+          }
 
           // Paddle meshes
           if (paddle?.mesh) {
@@ -640,7 +654,8 @@
               `Preset: ${preset.name}  (X)\n` +
               `Blocks: ${prog.name}  (Y)\n` +
               `Пульсация: ${pulseTxt} (A/B)\n` +
-              `Левый стик: бита + высота   Правый стик: дистанция\n` +
+              `Левый стик: бита + высота\n` +
+              `Правый стик: дистанция + масштаб (Scale: ${boardScale.toFixed(2)})\n` +
               `${hintServe}\n` +
               `Score: ${score}   Lives: ${lives}   Power: ${widenTxt}`;
 
