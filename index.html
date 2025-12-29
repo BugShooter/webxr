@@ -91,7 +91,7 @@
         </p>
         <button id="startBtn" onclick="startXR()">Запустить VR</button>
         <div id="status">Готово к запуску</div>
-        <div class="version">v0.1 - MVP alignment</div>
+        <div class="version">v0.3 (2025-12-29) - MVP alignment</div>
     </div>
     
     <canvas id="glCanvas"></canvas>
@@ -106,8 +106,8 @@
         let leftRing;
         let rightDot;
         let rightGuideRing;
-        let leftHalfRing;
-        let rightHalfRing;
+        let leftHalfDisk;
+        let rightHalfDisk;
         let leftZigSplit;
         let rightZigSplit;
 
@@ -274,8 +274,8 @@
 
             const splitShape = currentSplitShape();
             const useZig = mode === 'split' && splitShape === 'zigzag';
-            if (leftHalfRing) leftHalfRing.visible = mode === 'split' && !useZig;
-            if (rightHalfRing) rightHalfRing.visible = mode === 'split' && !useZig;
+            if (leftHalfDisk) leftHalfDisk.visible = mode === 'split' && !useZig;
+            if (rightHalfDisk) rightHalfDisk.visible = mode === 'split' && !useZig;
             if (leftZigSplit) leftZigSplit.visible = useZig;
             if (rightZigSplit) rightZigSplit.visible = useZig;
         }
@@ -292,12 +292,16 @@
             const pxPerUnit = (size * 0.48) / outerRadius;
             ctx.scale(pxPerUnit, pxPerUnit);
 
-            // Базовая фигура: кольцо (annulus)
+            // Базовая фигура: диск или кольцо
             ctx.fillStyle = '#ff4d4d';
             ctx.beginPath();
             ctx.arc(0, 0, outerRadius, 0, Math.PI * 2, false);
-            ctx.arc(0, 0, innerRadius, 0, Math.PI * 2, true);
-            ctx.fill('evenodd');
+            if (innerRadius > 0.0001) {
+                ctx.arc(0, 0, innerRadius, 0, Math.PI * 2, true);
+                ctx.fill('evenodd');
+            } else {
+                ctx.fill();
+            }
 
             // Маска половины с зигзагообразной границей
             ctx.globalCompositeOperation = 'destination-in';
@@ -425,22 +429,24 @@
             rightGuideRing.layers.set(2);
             stimulusGroup.add(rightGuideRing);
 
-            // Режим split: половинки одного кольца в разные глаза
-            const halfMatLeft = new THREE.MeshStandardMaterial({ color: 0xff4d4d, emissive: 0xff0000, emissiveIntensity: 0.20, transparent: true, opacity: 1.0 });
-            leftHalfRing = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.020, 12, 64, Math.PI), halfMatLeft);
-            leftHalfRing.layers.set(1);
-            stimulusGroup.add(leftHalfRing);
+            // Режим split: половинки ЦЕЛЬНОГО круга (не кольцо)
+            const SPLIT_RADIUS = RING_RADIUS;
+            const splitMatLeft = new THREE.MeshBasicMaterial({ color: 0xff4d4d, transparent: true, opacity: 1.0, side: THREE.DoubleSide });
+            const splitMatRight = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1.0, side: THREE.DoubleSide });
 
-            const halfMatRight = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x4040ff, emissiveIntensity: 0.10, transparent: true, opacity: 1.0 });
-            rightHalfRing = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.020, 12, 64, Math.PI), halfMatRight);
-            rightHalfRing.rotation.z = Math.PI;
-            rightHalfRing.layers.set(2);
-            stimulusGroup.add(rightHalfRing);
+            // Вертикальный разрез (left/right)
+            leftHalfDisk = new THREE.Mesh(new THREE.CircleGeometry(SPLIT_RADIUS, 72, Math.PI / 2, Math.PI), splitMatLeft);
+            leftHalfDisk.layers.set(1);
+            stimulusGroup.add(leftHalfDisk);
 
-            // Режим split (zigzag): плоские половины с «зубчиками» на границе
-            const outer = RING_RADIUS + RING_TUBE;
-            const inner = RING_RADIUS - RING_TUBE;
-            const zigSize = outer * 2 * 1.05;
+            rightHalfDisk = new THREE.Mesh(new THREE.CircleGeometry(SPLIT_RADIUS, 72, -Math.PI / 2, Math.PI), splitMatRight);
+            rightHalfDisk.layers.set(2);
+            stimulusGroup.add(rightHalfDisk);
+
+            // Режим split (zigzag): половины ЦЕЛЬНОГО круга с «зубчиками» на границе
+            const outer = RING_RADIUS;
+            const inner = 0;
+            const zigSize = outer * 2 * 1.10;
             const zigGeom = new THREE.PlaneGeometry(zigSize, zigSize);
             const zigLeftTex = createZigzagSplitTexture('left', outer, inner);
             const zigRightTex = createZigzagSplitTexture('right', outer, inner);
@@ -557,8 +563,8 @@
             if (leftRing) leftRing.rotation.z = time * 0.0003;
             {
                 const splitRot = currentSplitShape() === 'horizontal' ? Math.PI / 2 : 0;
-                if (leftHalfRing) leftHalfRing.rotation.z = splitRot + time * 0.0003;
-                if (rightHalfRing) rightHalfRing.rotation.z = Math.PI + splitRot + time * 0.0003;
+                if (leftHalfDisk) leftHalfDisk.rotation.z = splitRot + time * 0.0003;
+                if (rightHalfDisk) rightHalfDisk.rotation.z = splitRot + time * 0.0003;
                 if (leftZigSplit) leftZigSplit.rotation.z = time * 0.0003;
                 if (rightZigSplit) rightZigSplit.rotation.z = time * 0.0003;
             }
@@ -570,7 +576,7 @@
                 const gpL = getGamepad(session, 'left');
 
                 // общий edge-detect стор
-                if (!animate._prev) animate._prev = { stick: false, a: false, b: false, lstick: false };
+                if (!animate._prev) animate._prev = { a: false, b: false, x: false, y: false };
 
                 // Правый стик: X — смещение; Y — дистанция
                 if (gpR) {
@@ -592,25 +598,16 @@
                     targetDistance = clamp(targetDistance - stickY * 0.90 * dt, 0.6, 4.0);
 
                     // Кнопки (приблизительное соответствие Oculus Touch)
-                    // 3: нажатие стика — смена режима
                     // 4: A — пульсация on/off
                     // 5: B — смена периода пульсации
-                    const pressedStick = buttonPressed(gpR, 3);
                     const pressedA = buttonPressed(gpR, 4);
                     const pressedB = buttonPressed(gpR, 5);
-
-                    if (pressedStick && !animate._prev.stick) {
-                        modeIndex = (modeIndex + 1) % MODES.length;
-                        applyModeVisibility();
-                    }
                     if (pressedA && !animate._prev.a) {
                         pulseEnabled = !pulseEnabled;
                     }
                     if (pressedB && !animate._prev.b) {
                         pulsePeriodIndex = (pulsePeriodIndex + 1) % PULSE_PERIODS.length;
                     }
-
-                    animate._prev.stick = pressedStick;
                     animate._prev.a = pressedA;
                     animate._prev.b = pressedB;
                 }
@@ -624,13 +621,21 @@
                     stickY = deadzone(stickY, 0.12);
                     targetHeight = clamp(targetHeight - stickY * 0.90 * dt, 0.7, 2.2);
 
-                    // 3: нажатие левого стика — смена фигуры split
-                    const pressedLStick = buttonPressed(gpL, 3);
-                    if (pressedLStick && !animate._prev.lstick) {
+                    // X/Y на левом контроллере: режим / фигура split
+                    const pressedX = buttonPressed(gpL, 4);
+                    const pressedY = buttonPressed(gpL, 5);
+
+                    if (pressedX && !animate._prev.x) {
+                        modeIndex = (modeIndex + 1) % MODES.length;
+                        applyModeVisibility();
+                    }
+                    if (pressedY && !animate._prev.y) {
                         splitShapeIndex = (splitShapeIndex + 1) % SPLIT_SHAPES.length;
                         applyModeVisibility();
                     }
-                    animate._prev.lstick = pressedLStick;
+
+                    animate._prev.x = pressedX;
+                    animate._prev.y = pressedY;
                 }
             }
 
@@ -660,11 +665,11 @@
             };
 
             setOpacityValue(leftRing, leftOpacity);
-            setOpacityValue(leftHalfRing, leftOpacity);
+            setOpacityValue(leftHalfDisk, leftOpacity);
             setOpacityValue(leftZigSplit, leftOpacity);
             setOpacityValue(rightDot, rightOpacity);
             setOpacityValue(rightGuideRing, rightOpacity);
-            setOpacityValue(rightHalfRing, rightOpacity);
+            setOpacityValue(rightHalfDisk, rightOpacity);
             setOpacityValue(rightZigSplit, rightOpacity);
 
             // Обновляем позиции стимулов
@@ -672,11 +677,11 @@
 
             // Смещение по X (диспаратность)
             if (leftRing) leftRing.position.set(-disparityX / 2, 0, 0);
-            if (leftHalfRing) leftHalfRing.position.set(-disparityX / 2, 0, 0);
+            if (leftHalfDisk) leftHalfDisk.position.set(-disparityX / 2, 0, 0);
             if (leftZigSplit) leftZigSplit.position.set(-disparityX / 2, 0, 0);
             if (rightDot) rightDot.position.set(disparityX / 2, 0, 0);
             if (rightGuideRing) rightGuideRing.position.set(disparityX / 2, 0, 0);
-            if (rightHalfRing) rightHalfRing.position.set(disparityX / 2, 0, 0);
+            if (rightHalfDisk) rightHalfDisk.position.set(disparityX / 2, 0, 0);
             if (rightZigSplit) rightZigSplit.position.set(disparityX / 2, 0, 0);
 
             // HUD обновляем редко (без постоянного пересоздания текстур)
@@ -693,7 +698,7 @@
                 const pulse = pulseEnabled ? `ON (${period.toFixed(1)}s)` : 'OFF';
                 const hint = alignedNow ? 'СОВПАЛО ✅  Нажмите триггер' : 'Совместите и нажмите триггер';
                 const txt =
-                    `Режим: ${mode}   |   Split-фигура: ${shape} (нажмите левый стик)\n` +
+                    `Режим: ${mode} (X)   |   Split-фигура: ${shape} (Y)\n` +
                     `Пульсация: ${pulse} (A/B)\n` +
                     `Правый стик: смещение/дистанция   Левый стик: высота\n` +
                     `Dist: ${targetDistance.toFixed(2)}m  Height: ${targetHeight.toFixed(2)}m  |dx|: ${Math.abs(disparityX).toFixed(3)}m\n` +
