@@ -5,20 +5,12 @@
     return {
       id: 'trajectory',
       name: 'Trajectory',
-      async start(ctx) {
-        const THREE = window.THREE;
-        const Base = window.WebXRBase;
-
-        let scene, camera, renderer;
+      init({ runtime, THREE, Base, scene }) {
         let group;
 
         const hudState = { hudLastText: '', hudLastBg: '' };
         let hudPanel;
         let hudLastUpdateAtMs = 0;
-
-        let targetDistance = 2.2;
-        let targetHeight = 1.55;
-        let targetScale = 1.0;
 
         // Dot
         let dotLeft;
@@ -36,11 +28,6 @@
         const TRAIL_DIAMETER = TRAIL_R * 2;
         const TRAIL_FADE_SEC = 1.3;
 
-        // Per-eye fade
-        const PULSE_PERIODS = [0.6, 1.0, 1.6, 2.4];
-        let pulsePeriodIndex = 2;
-        let altFadeEnabled = true;
-
         const PATHS = [
           { id: 'circle', name: 'Круг' },
           { id: 'eight', name: 'Восьмёрка' },
@@ -51,15 +38,10 @@
         ];
         let pathIndex = 0;
 
-        let lastTimeMs = 0;
-
         function currentPath() {
           return PATHS[pathIndex] || PATHS[0];
         }
 
-        function pulsePeriodSeconds() {
-          return PULSE_PERIODS[pulsePeriodIndex] || 1.6;
-        }
 
         function makeGridLines() {
           const size = 1.2;
@@ -98,20 +80,6 @@
           mesh.material.needsUpdate = true;
         }
 
-        function altFadeOpacities(tSec) {
-          if (!altFadeEnabled) return { l: 1, r: 1 };
-
-          const segment = pulsePeriodSeconds();
-          const phaseIndex = Math.floor(tSec / segment) % 2; // 0=left fades, 1=right fades
-          const u = (tSec % segment) / segment; // 0..1
-
-          // 1 -> 0 -> 1
-          const env = 1 - (0.5 - 0.5 * Math.cos(u * Math.PI * 2));
-          const active = 0.05 + 0.95 * env;
-
-          return phaseIndex === 0 ? { l: active, r: 1 } : { l: 1, r: active };
-        }
-
         function polylinePoint(points, t) {
           // points: [{x,y}], closed expected
           if (!points || points.length < 2) return { x: 0, y: 0 };
@@ -143,8 +111,8 @@
           return { x: points[0].x, y: points[0].y };
         }
 
-        function pathPosition(tSec) {
-          const id = currentPath().id;
+        function pathPosition(tSec, pathId) {
+          const id = pathId;
           const R = 0.45;
 
           // Speed chosen to keep motion comfortable
@@ -250,183 +218,149 @@
           }
         }
 
-        function initThreeJS() {
-          ctx.log('🔧 Инициализация Three.js...');
+        group = new THREE.Group();
+        scene.add(group);
 
-          scene = new THREE.Scene();
-          scene.background = new THREE.Color(0x0a0a0a);
+        orientationGrid = makeGridLines();
+        group.add(orientationGrid);
 
-          camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
-          camera.position.set(0, 1.6, 0);
+        dotLeft = makeDotMesh(1, 0xff4d4d, 0.03);
+        dotRight = makeDotMesh(2, 0xff4d4d, 0.03);
+        group.add(dotLeft);
+        group.add(dotRight);
 
-          renderer = new THREE.WebGLRenderer({ canvas: ctx.canvas, antialias: true, alpha: false });
-          renderer.setPixelRatio(window.devicePixelRatio);
-          renderer.setSize(window.innerWidth, window.innerHeight);
-          renderer.xr.enabled = true;
+        hudPanel = Base.createHudPanel(THREE, '...', '#222222');
+        hudPanel.position.set(0, 2.45, -2.85);
+        hudPanel.rotation.x = 0.25;
+        scene.add(hudPanel);
 
-          scene.add(new THREE.AmbientLight(0xffffff, 0.85));
-          const light1 = new THREE.DirectionalLight(0xffffff, 0.6);
-          light1.position.set(2, 3, 1);
-          scene.add(light1);
+        this._state = {
+          runtime,
+          THREE,
+          Base,
+          scene,
+          group,
+          hudState,
+          hudPanel,
+          hudLastUpdateAtMs,
+          PATHS,
+          pathIndex,
+          trailEnabled,
+          trail,
+          lastTrailX,
+          lastTrailY,
+          dotLeft,
+          dotRight,
+        };
+      },
 
-          const floorGeom = new THREE.PlaneGeometry(10, 10);
-          const floorMat = new THREE.MeshStandardMaterial({ color: 0x333333, side: THREE.DoubleSide });
-          const floor = new THREE.Mesh(floorGeom, floorMat);
-          floor.rotation.x = -Math.PI / 2;
-          floor.position.y = 0;
-          scene.add(floor);
+      update({ t, input, settings, fade }) {
+        const s = this._state;
+        if (!s) return;
 
-          const grid = new THREE.GridHelper(10, 20, 0x666666, 0x444444);
-          grid.position.y = 0.01;
-          scene.add(grid);
-
-          group = new THREE.Group();
-          group.position.set(0, targetHeight, -targetDistance);
-          scene.add(group);
-
-          orientationGrid = makeGridLines();
-          group.add(orientationGrid);
-
-          dotLeft = makeDotMesh(1, 0xff4d4d, 0.03);
-          dotRight = makeDotMesh(2, 0xff4d4d, 0.03);
-          group.add(dotLeft);
-          group.add(dotRight);
-
-          hudPanel = Base.createHudPanel(THREE, '...', '#222222');
-          hudPanel.position.set(0, 2.45, -2.85);
-          hudPanel.rotation.x = 0.25;
-          scene.add(hudPanel);
-
-          ctx.log('✅ Three.js готов');
+        if (input?.justX) {
+          s.pathIndex = (s.pathIndex + 1) % s.PATHS.length;
+        }
+        if (input?.justY) {
+          s.trailEnabled = !s.trailEnabled;
+          s.lastTrailX = 1e9;
+          s.lastTrailY = 1e9;
         }
 
-        function animate(timeMs) {
-          const dt = lastTimeMs ? (timeMs - lastTimeMs) / 1000 : 0;
-          lastTimeMs = timeMs;
-
-          const tSec = timeMs / 1000;
-
-          // Input
-          const session = renderer.xr.getSession();
-          if (session && dt > 0) {
-            const gpL = Base.getGamepad(session, 'left');
-            const gpR = Base.getGamepad(session, 'right');
-
-            if (!animate._prev) animate._prev = { a: false, b: false, x: false, y: false };
-
-            if (gpL) {
-              const axes = gpL.axes || [];
-              let stickY = 0;
-              if (axes.length >= 4) stickY = axes[3];
-              else if (axes.length >= 2) stickY = axes[1];
-              stickY = Base.deadzone(stickY, 0.12);
-              targetHeight = Base.clamp(targetHeight - stickY * 0.9 * dt, 0.7, 2.2);
-
-              const pressedX = Base.buttonPressed(gpL, 4);
-              const pressedY = Base.buttonPressed(gpL, 5);
-              if (pressedX && !animate._prev.x) pathIndex = (pathIndex + 1) % PATHS.length;
-              if (pressedY && !animate._prev.y) {
-                trailEnabled = !trailEnabled;
-                lastTrailX = 1e9;
-                lastTrailY = 1e9;
-              }
-              animate._prev.x = pressedX;
-              animate._prev.y = pressedY;
-            }
-
-            if (gpR) {
-              const axes = gpR.axes || [];
-              let stickX = 0;
-              let stickY = 0;
-              if (axes.length >= 4) {
-                stickX = axes[2];
-                stickY = axes[3];
-              } else if (axes.length >= 2) {
-                stickX = axes[0];
-                stickY = axes[1];
-              }
-
-              stickX = Base.deadzone(stickX, 0.12);
-              stickY = Base.deadzone(stickY, 0.12);
-
-              targetDistance = Base.clamp(targetDistance - stickY * 0.9 * dt, 0.9, 4.0);
-              targetScale = Base.clamp(targetScale + stickX * 0.9 * dt, 0.6, 2.2);
-
-              const pressedA = Base.buttonPressed(gpR, 4);
-              const pressedB = Base.buttonPressed(gpR, 5);
-              if (pressedA && !animate._prev.a) altFadeEnabled = !altFadeEnabled;
-              if (pressedB && !animate._prev.b) pulsePeriodIndex = (pulsePeriodIndex + 1) % PULSE_PERIODS.length;
-              animate._prev.a = pressedA;
-              animate._prev.b = pressedB;
-            }
-          }
-
-          if (group) {
-            group.position.set(0, targetHeight, -targetDistance);
-            group.scale.setScalar(targetScale);
-          }
-
-          const pos = pathPosition(tSec);
-          if (dotLeft) dotLeft.position.set(pos.x, pos.y, 0);
-          if (dotRight) dotRight.position.set(pos.x, pos.y, 0);
-
-          maybeAddTrailDot(pos.x, pos.y, tSec);
-          updateTrail(tSec);
-
-          const op = altFadeOpacities(tSec);
-          setOpacity(dotLeft, op.l);
-          setOpacity(dotRight, op.r);
-
-          // HUD
-          const nowMs = performance.now();
-          if (hudPanel && nowMs - hudLastUpdateAtMs > 250) {
-            const fadeTxt = altFadeEnabled ? `ALT (${pulsePeriodSeconds().toFixed(1)}s)` : 'OFF';
-            const path = currentPath();
-            const trailTxt = trailEnabled ? 'ON (Y)' : 'OFF (Y)';
-
-            const txt =
-              `Тренажёр: Trajectory\n` +
-              `Траектория: ${path.name} (X)\n` +
-              `Плавное исчезание: ${fadeTxt} (A/B)\n` +
-              `След (серый): ${trailTxt}\n` +
-              `Правый стик: дистанция + масштаб (Scale: ${targetScale.toFixed(2)})\n` +
-              `Левый стик: высота (Height: ${targetHeight.toFixed(2)}m)`;
-
-            Base.updateHudPanel(THREE, hudState, hudPanel, txt, '#222222');
-            hudLastUpdateAtMs = nowMs;
-          }
-
-          // Layers per eye
-          const xrCamera = renderer.xr.getCamera(camera);
-          if (xrCamera && xrCamera.isArrayCamera && xrCamera.cameras && xrCamera.cameras.length >= 2) {
-            xrCamera.cameras[0].layers.enable(0);
-            xrCamera.cameras[0].layers.enable(1);
-            xrCamera.cameras[0].layers.disable(2);
-
-            xrCamera.cameras[1].layers.enable(0);
-            xrCamera.cameras[1].layers.enable(2);
-            xrCamera.cameras[1].layers.disable(1);
-          }
-
-          renderer.render(scene, camera);
+        if (s.group) {
+          s.group.position.set(0, settings.height, -settings.distance);
+          s.group.scale.setScalar(settings.scale);
         }
 
-        initThreeJS();
+        const path = s.PATHS[s.pathIndex] || s.PATHS[0];
+        const pos = pathPosition(t, path.id);
+        if (s.dotLeft) s.dotLeft.position.set(pos.x, pos.y, 0);
+        if (s.dotRight) s.dotRight.position.set(pos.x, pos.y, 0);
 
-        const session = await Base.requestAndStartXRSession({
-          renderer,
-          container: ctx.container,
-          log: ctx.log,
-          requiredFeatures: ['local-floor'],
-        });
+        // Trail (grey, shared)
+        const nowSec = t;
 
-        session.addEventListener('end', () => {
-          ctx.log('VR завершён');
-          ctx.container.style.display = 'block';
-          ctx.startBtn.disabled = false;
-        });
+        const dx = pos.x - s.lastTrailX;
+        const dy = pos.y - s.lastTrailY;
+        if (s.trailEnabled && Math.hypot(dx, dy) >= TRAIL_DIAMETER) {
+          s.lastTrailX = pos.x;
+          s.lastTrailY = pos.y;
 
-        renderer.setAnimationLoop(animate);
+          const mesh = makeDotMesh(0, 0xaaaaaa, TRAIL_R);
+          mesh.material.opacity = 0.35;
+          mesh.position.set(pos.x, pos.y, 0);
+          s.group.add(mesh);
+          s.trail.push({ mesh, bornAt: nowSec });
+        }
+
+        // Fade trail
+        for (let i = s.trail.length - 1; i >= 0; i--) {
+          const item = s.trail[i];
+          const age = nowSec - item.bornAt;
+          const k = 1 - s.Base.clamp(age / TRAIL_FADE_SEC, 0, 1);
+          setOpacity(item.mesh, 0.35 * k);
+          if (age >= TRAIL_FADE_SEC) {
+            s.group.remove(item.mesh);
+            if (item.mesh.geometry) item.mesh.geometry.dispose();
+            if (item.mesh.material) item.mesh.material.dispose();
+            s.trail.splice(i, 1);
+          }
+        }
+
+        setOpacity(s.dotLeft, fade.l);
+        setOpacity(s.dotRight, fade.r);
+
+        const nowMs = performance.now();
+        if (s.hudPanel && nowMs - s.hudLastUpdateAtMs > 250) {
+          const trailTxt = s.trailEnabled ? 'ON (Y)' : 'OFF (Y)';
+          const fadeTxt = settings.altFadeEnabled ? `ON (${(settings.fadeProfiles[settings.fadeProfileIndex]?.name || 'profile')})` : 'OFF';
+
+          const txt =
+            `Тренажёр: Trajectory\n` +
+            `Траектория: ${path.name} (X)\n` +
+            `След (серый): ${trailTxt}\n` +
+            `ALT fade (global): ${fadeTxt}\n` +
+            `Откройте меню для настроек`;
+
+          s.Base.updateHudPanel(s.THREE, s.hudState, s.hudPanel, txt, '#222222');
+          s.hudLastUpdateAtMs = nowMs;
+        }
+      },
+
+      dispose() {
+        const s = this._state;
+        if (!s) return;
+
+        try {
+          for (const item of s.trail) {
+            s.group.remove(item.mesh);
+            if (item.mesh.geometry) item.mesh.geometry.dispose();
+            if (item.mesh.material) item.mesh.material.dispose();
+          }
+        } catch (_) {
+          // ignore
+        }
+
+        if (s.hudPanel) {
+          s.scene.remove(s.hudPanel);
+          const map = s.hudPanel.material?.map;
+          if (map) map.dispose();
+          if (s.hudPanel.geometry) s.hudPanel.geometry.dispose();
+          if (s.hudPanel.material) s.hudPanel.material.dispose();
+        }
+
+        if (s.group) {
+          s.scene.remove(s.group);
+          s.group.traverse((obj) => {
+            if (obj.geometry) obj.geometry.dispose?.();
+            if (obj.material) {
+              if (obj.material.map) obj.material.map.dispose?.();
+              obj.material.dispose?.();
+            }
+          });
+        }
+
+        this._state = null;
       },
     };
   }

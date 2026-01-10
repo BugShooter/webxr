@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const BUILD = 'v0.7 (2025-12-29)';
+  const BUILD = 'v0.8 (2026-01-10)';
 
   const canvas = document.getElementById('glCanvas');
   const startBtn = document.getElementById('startBtn');
@@ -21,31 +21,25 @@
     return trainerSelect?.value || 'binocular';
   }
 
-  function resolveTrainer(id) {
-    const factory = window.WebXRTrainers?.[id];
-    if (!factory) return null;
-    return factory();
-  }
-
   async function startXR() {
     try {
       startBtn.disabled = true;
 
       const trainerId = getSelectedTrainerId();
-      const trainer = resolveTrainer(trainerId);
-      if (!trainer) {
-        log('❌ Тренажёр не найден');
+      if (!window.WebXRRuntime?.start) {
+        log('❌ Runtime не загружен');
         startBtn.disabled = false;
         return;
       }
 
-      await trainer.start({
+      await window.WebXRRuntime.start({
         canvas,
         startBtn,
         container,
         statusDiv,
         log,
         build: BUILD,
+        initialTrainerId: trainerId,
       });
     } catch (err) {
       console.error(err);
