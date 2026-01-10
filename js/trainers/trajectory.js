@@ -249,6 +249,12 @@
           trail,
           lastTrailX,
           lastTrailY,
+          TRAIL_R,
+          TRAIL_DIAMETER,
+          TRAIL_FADE_SEC,
+          makeDotMesh,
+          setOpacity,
+          pathPosition,
           dotLeft,
           dotRight,
         };
@@ -273,7 +279,7 @@
         }
 
         const path = s.PATHS[s.pathIndex] || s.PATHS[0];
-        const pos = pathPosition(t, path.id);
+        const pos = s.pathPosition(t, path.id);
         if (s.dotLeft) s.dotLeft.position.set(pos.x, pos.y, 0);
         if (s.dotRight) s.dotRight.position.set(pos.x, pos.y, 0);
 
@@ -282,11 +288,11 @@
 
         const dx = pos.x - s.lastTrailX;
         const dy = pos.y - s.lastTrailY;
-        if (s.trailEnabled && Math.hypot(dx, dy) >= TRAIL_DIAMETER) {
+        if (s.trailEnabled && Math.hypot(dx, dy) >= s.TRAIL_DIAMETER) {
           s.lastTrailX = pos.x;
           s.lastTrailY = pos.y;
 
-          const mesh = makeDotMesh(0, 0xaaaaaa, TRAIL_R);
+          const mesh = s.makeDotMesh(0, 0xaaaaaa, s.TRAIL_R);
           mesh.material.opacity = 0.35;
           mesh.position.set(pos.x, pos.y, 0);
           s.group.add(mesh);
@@ -297,9 +303,9 @@
         for (let i = s.trail.length - 1; i >= 0; i--) {
           const item = s.trail[i];
           const age = nowSec - item.bornAt;
-          const k = 1 - s.Base.clamp(age / TRAIL_FADE_SEC, 0, 1);
-          setOpacity(item.mesh, 0.35 * k);
-          if (age >= TRAIL_FADE_SEC) {
+          const k = 1 - s.Base.clamp(age / s.TRAIL_FADE_SEC, 0, 1);
+          s.setOpacity(item.mesh, 0.35 * k);
+          if (age >= s.TRAIL_FADE_SEC) {
             s.group.remove(item.mesh);
             if (item.mesh.geometry) item.mesh.geometry.dispose();
             if (item.mesh.material) item.mesh.material.dispose();
@@ -307,8 +313,8 @@
           }
         }
 
-        setOpacity(s.dotLeft, fade.l);
-        setOpacity(s.dotRight, fade.r);
+        s.setOpacity(s.dotLeft, fade.l);
+        s.setOpacity(s.dotRight, fade.r);
 
         const nowMs = performance.now();
         if (s.hudPanel && nowMs - s.hudLastUpdateAtMs > 250) {

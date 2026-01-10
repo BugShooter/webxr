@@ -28,11 +28,14 @@
     context.fillStyle = textColor;
 
     const maxTextWidth = canvas.width - 40;
+    const maxTextHeight = canvas.height - 40;
     let fontSize = 64;
-    while (fontSize >= 22) {
+    while (fontSize >= 18) {
       context.font = `Bold ${fontSize}px Arial`;
       const widest = lines.reduce((m, line) => Math.max(m, context.measureText(line).width), 0);
-      if (widest <= maxTextWidth) break;
+      const lineHeight = Math.round(fontSize * 1.1);
+      const totalHeight = lineHeight * lines.length;
+      if (widest <= maxTextWidth && totalHeight <= maxTextHeight) break;
       fontSize -= 2;
     }
 

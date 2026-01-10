@@ -68,15 +68,35 @@
     };
     runtime.input = input;
 
-    // Menu state
-    const menu = {
+    // Menus (two panels)
+    const trainerMenu = {
       open: false,
       index: 0,
       hudState: { hudLastText: '', hudLastBg: '' },
       panel: null,
       lastUpdateAtMs: 0,
+      layout: null,
     };
-    runtime.menu = menu;
+
+    const settingsMenu = {
+      open: false,
+      index: 0,
+      hudState: { hudLastText: '', hudLastBg: '' },
+      panel: null,
+      lastUpdateAtMs: 0,
+      layout: null,
+    };
+
+    runtime.menu = { trainerMenu, settingsMenu };
+
+    // Laser pointer (ray) for menu interaction
+    const raycaster = new THREE.Raycaster();
+    const laser = {
+      line0: null,
+      line1: null,
+      dot: null,
+      activeController: null,
+    };
 
     function status(msg) {
       if (log) log(msg);
@@ -205,73 +225,116 @@
       input._prev.menu = menuNow;
     }
 
-    function ensureMenuPanel() {
-      if (menu.panel) return;
-      menu.panel = Base.createHudPanel(THREE, 'Menu...', '#222222');
-      // attach to camera so it follows head
-      menu.panel.position.set(0, 0, -1.6);
-      menu.panel.rotation.x = 0.1;
-      camera.add(menu.panel);
+    function ensureMenuPanels() {
+      const placePanel = (panel) => {
+        // farther away to reduce vergence strain; scaled up for readability
+        panel.position.set(0, 0, -2.6);
+        panel.rotation.x = 0.08;
+        panel.scale.setScalar(1.4);
+        camera.add(panel);
+      };
+
+      if (!trainerMenu.panel) {
+        trainerMenu.panel = Base.createHudPanel(THREE, 'Trainer...', '#222222');
+        placePanel(trainerMenu.panel);
+      }
+
+      if (!settingsMenu.panel) {
+        settingsMenu.panel = Base.createHudPanel(THREE, 'Settings...', '#222222');
+        placePanel(settingsMenu.panel);
+      }
     }
 
-    function openMenu() {
-      ensureMenuPanel();
-      menu.open = true;
-      menu.panel.visible = true;
-      menu.index = 0;
+    function openTrainerMenu() {
+      ensureMenuPanels();
+      trainerMenu.open = true;
+      settingsMenu.open = false;
+      trainerMenu.panel.visible = true;
+      settingsMenu.panel.visible = false;
+      trainerMenu.index = 0;
     }
 
-    function closeMenu() {
-      if (!menu.panel) return;
-      menu.open = false;
-      menu.panel.visible = false;
+    function openSettingsMenu() {
+      ensureMenuPanels();
+      settingsMenu.open = true;
+      trainerMenu.open = false;
+      settingsMenu.panel.visible = true;
+      trainerMenu.panel.visible = false;
+      settingsMenu.index = 0;
     }
 
-    function menuItems() {
+    function closeMenus() {
+      if (trainerMenu.panel) trainerMenu.panel.visible = false;
+      if (settingsMenu.panel) settingsMenu.panel.visible = false;
+      trainerMenu.open = false;
+      settingsMenu.open = false;
+    }
+
+    function activeMenu() {
+      if (trainerMenu.open) return trainerMenu;
+      if (settingsMenu.open) return settingsMenu;
+      return null;
+    }
+
+    function trainerMenuItems() {
       const trainers = listTrainers();
-      const idx = Math.max(0, trainers.findIndex((t) => t.id === runtime.activeTrainerId));
-      const cur = trainers[idx] || trainers[0];
-      const p = currentFadeProfile();
+      const items = [];
+      for (const t of trainers) items.push({ kind: 'pickTrainer', trainerId: t.id, label: `Start: ${t.name}` });
+      items.push({ kind: 'openSettings', label: 'Settings…' });
+      items.push({ kind: 'exit', label: 'Exit VR' });
+      items.push({ kind: 'close', label: 'Close' });
+      return items;
+    }
 
+    function settingsMenuItems() {
+      const p = currentFadeProfile();
       return [
-        { kind: 'trainer', label: `Trainer: ${cur ? cur.name : '—'}  (Trigger: next)` },
-        { kind: 'altEnabled', label: `ALT fade: ${runtime.settings.altFadeEnabled ? 'ON' : 'OFF'}  (Trigger: toggle)` },
-        { kind: 'profile', label: `Fade profile: ${p?.name || '—'}  (Trigger: next)` },
-        { kind: 'timing_on', label: `Timing ON: ${p.onMs} ms  (Adjust: right stick X)` },
-        { kind: 'timing_out', label: `Timing OUT: ${p.fadeOutMs} ms  (Adjust: right stick X)` },
-        { kind: 'timing_off', label: `Timing OFF: ${p.offMs} ms  (Adjust: right stick X)` },
-        { kind: 'timing_in', label: `Timing IN: ${p.fadeInMs} ms  (Adjust: right stick X)` },
-        { kind: 'addProfile', label: `Add profile (clone)` },
-        { kind: 'delProfile', label: `Delete profile (min 2)` },
-        { kind: 'distance', label: `Distance: ${runtime.settings.distance.toFixed(2)}m  (Adjust: right stick X)` },
-        { kind: 'height', label: `Height: ${runtime.settings.height.toFixed(2)}m  (Adjust: right stick X)` },
-        { kind: 'scale', label: `Scale: ${runtime.settings.scale.toFixed(2)}  (Adjust: right stick X)` },
-        { kind: 'exit', label: `Exit VR` },
-        { kind: 'close', label: `Close menu` },
+        { kind: 'altEnabled', label: `ALT fade: ${runtime.settings.altFadeEnabled ? 'ON' : 'OFF'} (Trigger: toggle)` },
+        { kind: 'profile', label: `Fade profile: ${p?.name || '—'} (Trigger: next)` },
+        { kind: 'timing_on', label: `Timing ON: ${p.onMs} ms (Adjust: right stick X)` },
+        { kind: 'timing_out', label: `Timing OUT: ${p.fadeOutMs} ms (Adjust: right stick X)` },
+        { kind: 'timing_off', label: `Timing OFF: ${p.offMs} ms (Adjust: right stick X)` },
+        { kind: 'timing_in', label: `Timing IN: ${p.fadeInMs} ms (Adjust: right stick X)` },
+        { kind: 'addProfile', label: 'Add profile (clone)' },
+        { kind: 'delProfile', label: 'Delete profile (min 2)' },
+        { kind: 'distance', label: `Distance: ${runtime.settings.distance.toFixed(2)}m (Adjust: right stick X)` },
+        { kind: 'height', label: `Height: ${runtime.settings.height.toFixed(2)}m (Adjust: right stick X)` },
+        { kind: 'scale', label: `Scale: ${runtime.settings.scale.toFixed(2)} (Adjust: right stick X)` },
+        { kind: 'back', label: 'Back to Trainer menu' },
+        { kind: 'close', label: 'Close' },
       ];
     }
 
-    function applyMenuSelection(kind) {
-      const trainers = listTrainers();
-      const curIndex = Math.max(0, trainers.findIndex((t) => t.id === runtime.activeTrainerId));
+    function applyMenuSelection(item) {
+      if (!item) return;
 
-      if (kind === 'trainer') {
-        const next = trainers[(curIndex + 1) % Math.max(1, trainers.length)];
-        if (next) runtime.setTrainer(next.id);
+      if (item.kind === 'pickTrainer') {
+        if (item.trainerId) runtime.setTrainer(item.trainerId);
+        closeMenus();
         return;
       }
 
-      if (kind === 'altEnabled') {
+      if (item.kind === 'openSettings') {
+        openSettingsMenu();
+        return;
+      }
+
+      if (item.kind === 'back') {
+        openTrainerMenu();
+        return;
+      }
+
+      if (item.kind === 'altEnabled') {
         runtime.settings.altFadeEnabled = !runtime.settings.altFadeEnabled;
         return;
       }
 
-      if (kind === 'profile') {
+      if (item.kind === 'profile') {
         runtime.settings.fadeProfileIndex = (runtime.settings.fadeProfileIndex + 1) % runtime.settings.fadeProfiles.length;
         return;
       }
 
-      if (kind === 'addProfile') {
+      if (item.kind === 'addProfile') {
         const src = currentFadeProfile();
         runtime.settings.fadeProfiles.push({
           name: `Custom ${runtime.settings.fadeProfiles.length + 1}`,
@@ -284,7 +347,7 @@
         return;
       }
 
-      if (kind === 'delProfile') {
+      if (item.kind === 'delProfile') {
         if (runtime.settings.fadeProfiles.length <= 2) return;
         const idx = runtime.settings.fadeProfileIndex;
         runtime.settings.fadeProfiles.splice(idx, 1);
@@ -292,13 +355,13 @@
         return;
       }
 
-      if (kind === 'exit') {
+      if (item.kind === 'exit') {
         runtime.endSession();
         return;
       }
 
-      if (kind === 'close') {
-        closeMenu();
+      if (item.kind === 'close') {
+        closeMenus();
       }
     }
 
@@ -347,51 +410,184 @@
       }
     }
 
-    function updateMenu() {
-      ensureMenuPanel();
+    function measureLayout(lines) {
+      // Mirrors Base.createTextTexture sizing logic enough for hit-testing
+      const canvasW = 1024;
+      const canvasH = 512;
+      const maxTextWidth = canvasW - 40;
+      const maxTextHeight = canvasH - 40;
 
-      // Navigation with left stick Y
-      const now = performance.now();
-      const stickY = input.axesL.y;
-      if (Math.abs(stickY) > 0.5 && now - input._debounce.navAtMs > 220) {
-        input._debounce.navAtMs = now;
-        const items = menuItems();
-        menu.index = (menu.index + (stickY > 0 ? 1 : -1) + items.length) % items.length;
+      const tmp = document.createElement('canvas');
+      tmp.width = canvasW;
+      tmp.height = canvasH;
+      const ctx = tmp.getContext('2d');
+
+      let fontSize = 64;
+      while (fontSize >= 18) {
+        ctx.font = `Bold ${fontSize}px Arial`;
+        const widest = lines.reduce((m, line) => Math.max(m, ctx.measureText(line).width), 0);
+        const lineHeight = Math.round(fontSize * 1.1);
+        const totalHeight = lineHeight * lines.length;
+        if (widest <= maxTextWidth && totalHeight <= maxTextHeight) break;
+        fontSize -= 2;
       }
 
-      const items = menuItems();
-      const selected = items[menu.index];
+      const lineHeight = Math.round(fontSize * 1.1);
+      const totalHeight = lineHeight * lines.length;
+      const startY = (canvasH - totalHeight) / 2 + lineHeight / 2;
+      return { canvasW, canvasH, fontSize, lineHeight, startY };
+    }
+
+    function renderMenuPanel(menuState, title, items, selectedIndex) {
+      const now = performance.now();
+      if (!menuState.panel) return;
+      if (now - menuState.lastUpdateAtMs < 150) return;
+
+      const lines = [];
+      lines.push(`${title} (Build ${build || ''})`);
+      lines.push('Point + Trigger to select.  Menu button to close.');
+      lines.push('Adjust (settings): Right stick X');
+      lines.push('');
+
+      const itemStartLine = lines.length;
+      for (let i = 0; i < items.length; i++) {
+        const prefix = i === selectedIndex ? '▶ ' : '  ';
+        lines.push(prefix + items[i].label);
+      }
+
+      const txt = lines.join('\n');
+      Base.updateHudPanel(THREE, menuState.hudState, menuState.panel, txt, '#111111');
+      menuState.layout = {
+        lines,
+        itemStartLine,
+        itemsCount: items.length,
+        ...measureLayout(lines),
+      };
+      menuState.lastUpdateAtMs = now;
+    }
+
+    function ensureLaser() {
+      if (!laser.dot) {
+        const geom = new THREE.SphereGeometry(0.01, 10, 10);
+        const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        laser.dot = new THREE.Mesh(geom, mat);
+        laser.dot.layers.set(0);
+        laser.dot.visible = false;
+        scene.add(laser.dot);
+      }
+
+      const makeLine = () => {
+        const geom = new THREE.BufferGeometry();
+        geom.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, -1], 3));
+        const mat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 });
+        const line = new THREE.Line(geom, mat);
+        line.layers.set(0);
+        line.visible = false;
+        return line;
+      };
+
+      if (!laser.line0) {
+        laser.line0 = makeLine();
+        controller0.add(laser.line0);
+      }
+      if (!laser.line1) {
+        laser.line1 = makeLine();
+        controller1.add(laser.line1);
+      }
+    }
+
+    function updateLaserAndPick(menuState, items) {
+      ensureLaser();
+
+      const panel = menuState.panel;
+      const layout = menuState.layout;
+      if (!panel || !layout) return { hoveredIndex: -1 };
+
+      const tryController = (controller, line) => {
+        if (!controller) return null;
+
+        const origin = new THREE.Vector3();
+        origin.setFromMatrixPosition(controller.matrixWorld);
+        const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(controller.quaternion).normalize();
+
+        raycaster.set(origin, dir);
+        const hits = raycaster.intersectObject(panel, true);
+        if (!hits || hits.length === 0) {
+          line.visible = true;
+          line.scale.z = 3.0;
+          return null;
+        }
+
+        const hit = hits[0];
+        const dist = hit.distance;
+        line.visible = true;
+        line.scale.z = Math.max(0.15, Math.min(4.5, dist));
+
+        if (hit.point) {
+          laser.dot.visible = true;
+          laser.dot.position.copy(hit.point);
+        }
+
+        const uv = hit.uv;
+        if (!uv) return { hoveredIndex: -1 };
+
+        const canvasY = (1 - uv.y) * layout.canvasH;
+        const firstCenterY = layout.startY;
+        const top = firstCenterY - layout.lineHeight / 2;
+        const idxLine = Math.floor((canvasY - top) / layout.lineHeight);
+
+        const itemLine = idxLine - layout.itemStartLine;
+        if (itemLine < 0 || itemLine >= layout.itemsCount) return { hoveredIndex: -1 };
+        return { hoveredIndex: itemLine };
+      };
+
+      // prefer right controller for pointing
+      laser.dot.visible = false;
+      const r = tryController(controller1, laser.line1);
+      const l = r ? null : tryController(controller0, laser.line0);
+
+      if (laser.line0) laser.line0.visible = !!menuState.open;
+      if (laser.line1) laser.line1.visible = !!menuState.open;
+
+      const h = r || l || { hoveredIndex: -1 };
+      return h;
+    }
+
+    function updateMenus() {
+      ensureMenuPanels();
+      const menuState = activeMenu();
+      if (!menuState) return;
+
+      const items = menuState === trainerMenu ? trainerMenuItems() : settingsMenuItems();
+
+      // Hover/select with laser pointer
+      const pick = updateLaserAndPick(menuState, items);
+      const hovered = pick.hoveredIndex;
+      if (hovered >= 0) menuState.index = hovered;
+
+      const selected = items[menuState.index];
 
       if (input.justSelect && selected) {
-        applyMenuSelection(selected.kind);
+        applyMenuSelection(selected);
         input.justSelect = false;
       }
 
-      // Adjust with right stick X for certain items
-      const adjX = input.axesR.x;
-      if (Math.abs(adjX) > 0.65 && selected) {
-        if (['timing_on', 'timing_out', 'timing_off', 'timing_in', 'distance', 'height', 'scale'].includes(selected.kind)) {
-          adjustMenuValue(selected.kind, adjX);
+      // Adjust with right stick X for certain settings items
+      if (menuState === settingsMenu && selected) {
+        const adjX = input.axesR.x;
+        if (Math.abs(adjX) > 0.65) {
+          if (['timing_on', 'timing_out', 'timing_off', 'timing_in', 'distance', 'height', 'scale'].includes(selected.kind)) {
+            adjustMenuValue(selected.kind, adjX);
+          }
         }
       }
 
-      // Render menu text
-      if (now - menu.lastUpdateAtMs > 150) {
-        const lines = [];
-        lines.push(`Menu (Build ${build || ''})`);
-        lines.push('Nav: Left stick Y  |  Select: Trigger  |  Toggle: Menu button');
-        lines.push('Adjust: Right stick X');
-        lines.push('');
-
-        for (let i = 0; i < items.length; i++) {
-          const prefix = i === menu.index ? '▶ ' : '  ';
-          lines.push(prefix + items[i].label);
-        }
-
-        const txt = lines.join('\n');
-        Base.updateHudPanel(THREE, menu.hudState, menu.panel, txt, '#111111');
-        menu.lastUpdateAtMs = now;
-      }
+      renderMenuPanel(
+        menuState,
+        menuState === trainerMenu ? 'Trainer Menu' : 'Settings',
+        items,
+        menuState.index
+      );
     }
 
     function disposeActiveTrainer() {
@@ -521,8 +717,9 @@
       });
 
       // Create menu panel (hidden)
-      ensureMenuPanel();
-      menu.panel.visible = false;
+      ensureMenuPanels();
+      trainerMenu.panel.visible = false;
+      settingsMenu.panel.visible = false;
 
       // Start trainer
       const trainers = listTrainers();
@@ -537,12 +734,12 @@
         updateInput(session);
 
         if (input.justMenu) {
-          if (menu.open) closeMenu();
-          else openMenu();
+          if (trainerMenu.open || settingsMenu.open) closeMenus();
+          else openTrainerMenu();
         }
 
-        if (menu.open) {
-          updateMenu();
+        if (trainerMenu.open || settingsMenu.open) {
+          updateMenus();
         } else {
           // Global unified controls (when menu is closed)
           // - Left stick Y: height
