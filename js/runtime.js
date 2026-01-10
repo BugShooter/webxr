@@ -34,6 +34,8 @@
       setTrainer: null,
       endSession: null,
       getAltFade: null,
+      controllers: null,
+      pointerLocal: null,
     };
 
     let scene;
@@ -67,8 +69,11 @@
       justSelect: false,
       justSqueeze: false,
 
-      _prev: { a: false, b: false, x: false, y: false, menu: false },
-      _debounce: { navAtMs: -1e9, adjustAtMs: -1e9 },
+      justTriggerR: false,
+
+      _prev: { a: false, b: false, x: false, y: false, menu: false, triggerR: false },
+      _debounce: { navAtMs: -1e9, adjustAtMs: -1e9, menuAtMs: -1e9 },
+      _hold: { yDownAtMs: null, yUsedForMenu: false },
     };
     runtime.input = input;
 
@@ -107,6 +112,7 @@
     };
 
     const POINTER_LOCAL = { x: 0, y: 0, z: -0.035 };
+    runtime.pointerLocal = POINTER_LOCAL;
 
     function status(msg) {
       if (log) log(msg);
@@ -209,24 +215,58 @@
       const xNow = input.gpL ? Base.buttonPressed(input.gpL, 4) : false;
       const yNow = input.gpL ? Base.buttonPressed(input.gpL, 5) : false;
 
+      // Right trigger (R index 0) as an explicit edge-trigger for in-trainer actions.
+      const triggerRNow = input.gpR ? Base.buttonPressed(input.gpR, 0) : false;
+
+      const buttonPressedDigital = (gp, idx) => {
+        const b = gp?.buttons?.[idx];
+        return !!(b && b.pressed);
+      };
+
       // Menu button (Quest): prefer dedicated "menu" button indices.
       // IMPORTANT: do NOT use thumbstick click (often button index 2), per user request.
       let menuNow = false;
       if (input.gpL) {
+        // Use *digital* press only to avoid random toggles from analog-valued buttons.
         menuNow =
-          Base.buttonPressed(input.gpL, 9) ||
-          Base.buttonPressed(input.gpL, 8) ||
-          Base.buttonPressed(input.gpL, 7) ||
-          Base.buttonPressed(input.gpL, 6) ||
-          // fallback (some mappings expose menu here)
-          Base.buttonPressed(input.gpL, 3);
+          buttonPressedDigital(input.gpL, 3) ||
+          buttonPressedDigital(input.gpL, 9) ||
+          buttonPressedDigital(input.gpL, 8) ||
+          buttonPressedDigital(input.gpL, 7) ||
+          buttonPressedDigital(input.gpL, 6);
+      }
+
+      // Fallback: long-hold Y toggles menu (useful if system menu button isn't exposed).
+      const nowMs = performance.now();
+      let menuFromHold = false;
+      if (yNow && !input._prev.y) {
+        input._hold.yDownAtMs = nowMs;
+        input._hold.yUsedForMenu = false;
+      }
+      if (!yNow) {
+        input._hold.yDownAtMs = null;
+        input._hold.yUsedForMenu = false;
+      }
+      if (yNow && input._hold.yDownAtMs != null && !input._hold.yUsedForMenu) {
+        if (nowMs - input._hold.yDownAtMs > 450) {
+          menuFromHold = true;
+          input._hold.yUsedForMenu = true;
+        }
       }
 
       input.justA = aNow && !input._prev.a;
       input.justB = bNow && !input._prev.b;
       input.justX = xNow && !input._prev.x;
       input.justY = yNow && !input._prev.y;
-      input.justMenu = menuNow && !input._prev.menu;
+      input.justMenu = (menuNow && !input._prev.menu) || menuFromHold;
+
+      input.justTriggerR = triggerRNow && !input._prev.triggerR;
+
+      // Debounce menu toggles to prevent accidental double-toggles
+      if (input.justMenu) {
+        if (nowMs - input._debounce.menuAtMs < 350) input.justMenu = false;
+        else input._debounce.menuAtMs = nowMs;
+      }
 
       input.a = aNow;
       input.b = bNow;
@@ -239,6 +279,8 @@
       input._prev.x = xNow;
       input._prev.y = yNow;
       input._prev.menu = menuNow;
+
+      input._prev.triggerR = triggerRNow;
     }
 
     function ensureMenuPanels() {
@@ -520,11 +562,14 @@
         geom.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, -1], 3));
         const mat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 });
         mat.depthTest = false;
+        mat.depthWrite = false;
         const line = new THREE.Line(geom, mat);
         line.layers.set(0);
         line.layers.enable(1);
         line.layers.enable(2);
         line.position.set(POINTER_LOCAL.x, POINTER_LOCAL.y, POINTER_LOCAL.z);
+        // HUD menus are renderOrder=999; keep the ray above the menu, but below the hit dot.
+        line.renderOrder = 1000;
         line.visible = false;
         return line;
       };
@@ -730,6 +775,7 @@
 
       controller0 = renderer.xr.getController(0);
       controller1 = renderer.xr.getController(1);
+      runtime.controllers = { left: controller0, right: controller1 };
 
       // Simple controller visualization (small cone) so you can see where hands are.
       const makeControllerViz = () => {
@@ -839,6 +885,15 @@
         if (trainerMenu.open || settingsMenu.open) {
           updateMenus(dt);
         } else {
+          // Quick fade switching for Trajectory without opening menus
+          if (runtime.activeTrainerId === 'trajectory') {
+            if (input.justTriggerR || input.justA) {
+              if (!runtime.settings.altFadeEnabled) runtime.settings.altFadeEnabled = true;
+              runtime.settings.fadeProfileIndex =
+                (runtime.settings.fadeProfileIndex + 1) % runtime.settings.fadeProfiles.length;
+            }
+          }
+
           // Global unified controls (when menu is closed)
           // - Left stick Y: height
           // - Left stick X: depth (distance)
@@ -877,6 +932,8 @@
         // Reset one-shot flags
         input.justSelect = false;
         input.justSqueeze = false;
+
+        input.justTriggerR = false;
 
         renderer.render(scene, camera);
       });

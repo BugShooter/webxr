@@ -11,6 +11,13 @@
         const hudState = { hudLastText: '', hudLastBg: '' };
         let hudPanel;
         let hudLastUpdateAtMs = 0;
+        let hudLayout = null;
+        let hudLines = null;
+
+        const raycaster = new THREE.Raycaster();
+        raycaster.layers.enable(0);
+        raycaster.layers.enable(1);
+        raycaster.layers.enable(2);
 
         // Dot
         let dotLeft;
@@ -40,6 +47,68 @@
 
         function currentPath() {
           return PATHS[pathIndex] || PATHS[0];
+        }
+
+        function measureLayout(lines) {
+          const canvasW = 1024;
+          const canvasH = 512;
+          const maxTextWidth = canvasW - 40;
+          const maxTextHeight = canvasH - 40;
+
+          const tmp = document.createElement('canvas');
+          tmp.width = canvasW;
+          tmp.height = canvasH;
+          const ctx = tmp.getContext('2d');
+
+          let fontSize = 64;
+          while (fontSize >= 18) {
+            ctx.font = `Bold ${fontSize}px Arial`;
+            const widest = lines.reduce((m, line) => Math.max(m, ctx.measureText(line).width), 0);
+            const lineHeight = Math.round(fontSize * 1.1);
+            const totalHeight = lineHeight * lines.length;
+            if (widest <= maxTextWidth && totalHeight <= maxTextHeight) break;
+            fontSize -= 2;
+          }
+
+          const lineHeight = Math.round(fontSize * 1.1);
+          const totalHeight = lineHeight * lines.length;
+          const startY = (canvasH - totalHeight) / 2 + lineHeight / 2;
+          return { canvasW, canvasH, fontSize, lineHeight, startY };
+        }
+
+        function hoveredHudLineIndex() {
+          if (!hudPanel || !hudLayout || !hudLines) return -1;
+          const menuOpen = runtime?.menu?.trainerMenu?.open || runtime?.menu?.settingsMenu?.open;
+          if (menuOpen) return -1;
+
+          const controllerR = runtime?.controllers?.right;
+          if (!controllerR) return -1;
+
+          hudPanel.updateMatrixWorld(true);
+          controllerR.updateMatrixWorld(true);
+
+          const p = runtime.pointerLocal || { x: 0, y: 0, z: -0.035 };
+          const origin = new THREE.Vector3(p.x, p.y, p.z);
+          controllerR.localToWorld(origin);
+
+          const q = new THREE.Quaternion();
+          controllerR.getWorldQuaternion(q);
+          const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(q).normalize();
+
+          raycaster.set(origin, dir);
+          const hits = raycaster.intersectObject(hudPanel, true);
+          if (!hits || hits.length === 0) return -1;
+
+          const hit = hits[0];
+          const uv = hit.uv;
+          if (!uv) return -1;
+
+          const canvasY = (1 - uv.y) * hudLayout.canvasH;
+          const firstCenterY = hudLayout.startY;
+          const top = firstCenterY - hudLayout.lineHeight / 2;
+          const idxLine = Math.floor((canvasY - top) / hudLayout.lineHeight);
+          if (idxLine < 0 || idxLine >= hudLines.length) return -1;
+          return idxLine;
         }
 
 
@@ -243,6 +312,9 @@
           hudState,
           hudPanel,
           hudLastUpdateAtMs,
+          hudLayout,
+          hudLines,
+          hoveredHudLineIndex,
           PATHS,
           pathIndex,
           trailEnabled,
@@ -263,6 +335,19 @@
       update({ t, input, settings, fade }) {
         const s = this._state;
         if (!s) return;
+
+        // If user points at the ALT fade line in this trainer HUD: allow cycling profile with right trigger or A
+        const idxLine = s.hoveredHudLineIndex?.() ?? -1;
+        const isHoveringFadeLine =
+          idxLine >= 0 &&
+          Array.isArray(s.hudLines) &&
+          typeof s.hudLines[idxLine] === 'string' &&
+          s.hudLines[idxLine].toLowerCase().includes('alt fade');
+
+        if (isHoveringFadeLine && (input?.justTriggerR || input?.justA)) {
+          if (!settings.altFadeEnabled) settings.altFadeEnabled = true;
+          settings.fadeProfileIndex = (settings.fadeProfileIndex + 1) % settings.fadeProfiles.length;
+        }
 
         if (input?.justX) {
           s.pathIndex = (s.pathIndex + 1) % s.PATHS.length;
@@ -321,14 +406,20 @@
           const trailTxt = s.trailEnabled ? 'ON (Y)' : 'OFF (Y)';
           const fadeTxt = settings.altFadeEnabled ? `ON (${(settings.fadeProfiles[settings.fadeProfileIndex]?.name || 'profile')})` : 'OFF';
 
-          const txt =
-            `Тренажёр: Trajectory\n` +
-            `Траектория: ${path.name} (X)\n` +
-            `След (серый): ${trailTxt}\n` +
-            `ALT fade (global): ${fadeTxt}\n` +
-            `Откройте меню для настроек`;
+          const lines = [
+            'Тренажёр: Trajectory',
+            `Траектория: ${path.name} (X)`,
+            `След (серый): ${trailTxt}`,
+            `ALT fade (global): ${fadeTxt}`,
+            'Наведи луч на ALT fade и нажми курок/A',
+            'Откройте меню для остальных настроек',
+          ];
+
+          const txt = lines.join('\n');
 
           s.Base.updateHudPanel(s.THREE, s.hudState, s.hudPanel, txt, '#222222');
+          s.hudLines = lines;
+          s.hudLayout = measureLayout(lines);
           s.hudLastUpdateAtMs = nowMs;
         }
       },
