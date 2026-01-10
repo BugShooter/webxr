@@ -16,6 +16,9 @@
         height: 1.55,
         scale: 1.0,
 
+        // Menu placement (meters from head)
+        menuDistance: 3.0,
+
         altFadeEnabled: true,
         fadeProfiles: [
           { name: 'Always ON', onMs: 999999, fadeOutMs: 0, offMs: 0, fadeInMs: 0 },
@@ -91,6 +94,10 @@
 
     // Laser pointer (ray) for menu interaction
     const raycaster = new THREE.Raycaster();
+    // HUD panels are on layers 0/1/2; allow ray to hit them.
+    raycaster.layers.enable(0);
+    raycaster.layers.enable(1);
+    raycaster.layers.enable(2);
     const laser = {
       line0: null,
       line1: null,
@@ -199,12 +206,18 @@
       const xNow = input.gpL ? Base.buttonPressed(input.gpL, 4) : false;
       const yNow = input.gpL ? Base.buttonPressed(input.gpL, 5) : false;
 
-      // Menu button: try indices that often map to menu/thumbstick
-      const menuNow = input.gpL
-        ? Base.buttonPressed(input.gpL, 3) || Base.buttonPressed(input.gpL, 2)
-        : input.gpR
-          ? Base.buttonPressed(input.gpR, 2)
-          : false;
+      // Menu button (Quest): prefer dedicated "menu" button indices.
+      // IMPORTANT: do NOT use thumbstick click (often button index 2), per user request.
+      let menuNow = false;
+      if (input.gpL) {
+        menuNow =
+          Base.buttonPressed(input.gpL, 9) ||
+          Base.buttonPressed(input.gpL, 8) ||
+          Base.buttonPressed(input.gpL, 7) ||
+          Base.buttonPressed(input.gpL, 6) ||
+          // fallback (some mappings expose menu here)
+          Base.buttonPressed(input.gpL, 3);
+      }
 
       input.justA = aNow && !input._prev.a;
       input.justB = bNow && !input._prev.b;
@@ -228,7 +241,8 @@
     function ensureMenuPanels() {
       const placePanel = (panel) => {
         // farther away to reduce vergence strain; scaled up for readability
-        panel.position.set(0, 0, -2.6);
+        const z = -Base.clamp(runtime.settings.menuDistance ?? 3.0, 1.2, 6.0);
+        panel.position.set(0, 0, z);
         panel.rotation.x = 0.08;
         panel.scale.setScalar(1.4);
         camera.add(panel);
@@ -243,6 +257,12 @@
         settingsMenu.panel = Base.createHudPanel(THREE, 'Settings...', '#222222');
         placePanel(settingsMenu.panel);
       }
+    }
+
+    function applyMenuDistance() {
+      const z = -Base.clamp(runtime.settings.menuDistance ?? 3.0, 1.2, 6.0);
+      if (trainerMenu.panel) trainerMenu.panel.position.z = z;
+      if (settingsMenu.panel) settingsMenu.panel.position.z = z;
     }
 
     function openTrainerMenu() {
@@ -503,6 +523,11 @@
       const layout = menuState.layout;
       if (!panel || !layout) return { hoveredIndex: -1 };
 
+      // Make sure matrices are up-to-date for raycasting
+      panel.updateMatrixWorld(true);
+      controller0.updateMatrixWorld(true);
+      controller1.updateMatrixWorld(true);
+
       const tryController = (controller, line) => {
         if (!controller) return null;
 
@@ -553,10 +578,21 @@
       return h;
     }
 
-    function updateMenus() {
+    function updateMenus(dt) {
       ensureMenuPanels();
       const menuState = activeMenu();
       if (!menuState) return;
+
+      // While any menu is open: right stick Y moves the menu closer/farther
+      // (push up = farther).
+      if (Math.abs(input.axesR.y) > 0.35) {
+        runtime.settings.menuDistance = Base.clamp(
+          (runtime.settings.menuDistance ?? 3.0) - input.axesR.y * 1.6 * dt,
+          1.2,
+          6.0
+        );
+        applyMenuDistance();
+      }
 
       const items = menuState === trainerMenu ? trainerMenuItems() : settingsMenuItems();
 
@@ -661,6 +697,20 @@
       controller0 = renderer.xr.getController(0);
       controller1 = renderer.xr.getController(1);
 
+      // Simple controller visualization (small cone) so you can see where hands are.
+      const makeControllerViz = () => {
+        const geom = new THREE.ConeGeometry(0.02, 0.06, 10);
+        const mat = new THREE.MeshStandardMaterial({ color: 0xdddddd, emissive: 0x111111, emissiveIntensity: 0.35 });
+        const mesh = new THREE.Mesh(geom, mat);
+        // Cone axis is +Y; rotate to point forward (-Z)
+        mesh.rotation.x = -Math.PI / 2;
+        mesh.position.set(0, -0.01, -0.035);
+        mesh.layers.set(0);
+        return mesh;
+      };
+      controller0.add(makeControllerViz());
+      controller1.add(makeControllerViz());
+
       controller0.addEventListener('selectstart', () => {
         input.justSelect = true;
       });
@@ -739,7 +789,7 @@
         }
 
         if (trainerMenu.open || settingsMenu.open) {
-          updateMenus();
+          updateMenus(dt);
         } else {
           // Global unified controls (when menu is closed)
           // - Left stick Y: height

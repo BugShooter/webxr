@@ -59,7 +59,10 @@
     const geometry = new THREE.PlaneGeometry(1.6, 0.7);
     const mesh = new THREE.Mesh(geometry, material);
     mesh.renderOrder = 999;
-    mesh.layers.set(1);
+    // Put HUD on shared layer 0 (both eyes), but also enable 1/2 for compatibility
+    // with existing code that expects HUD to render in either eye.
+    mesh.layers.set(0);
+    mesh.layers.enable(1);
     mesh.layers.enable(2);
     return mesh;
   }
