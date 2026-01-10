@@ -363,7 +363,7 @@
         if (input?.justB) pulsePeriodIndex = (pulsePeriodIndex + 1) % PULSE_PERIODS.length;
 
         // Paddle movement
-        const stickX = input?.axesL?.x || 0;
+        const stickX = input?.axesR?.x || 0;
         paddleX = Base.clamp(paddleX + stickX * 1.2 * dt, -BOARD_W / 2 + paddleW / 2, BOARD_W / 2 - paddleW / 2);
 
         updatePaddleMeshWidth();

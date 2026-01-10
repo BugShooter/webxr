@@ -245,7 +245,7 @@
 
       update({ t, dt, input, settings, fade }) {
         // Trainer-specific: disparity adjustment on left stick X
-        disparityX = Base.clamp(disparityX + (input.axesL.x || 0) * 0.6 * dt, -0.6, 0.6);
+        disparityX = Base.clamp(disparityX + (input.axesR.x || 0) * 0.6 * dt, -0.6, 0.6);
 
         if (input.justX) {
           modeIndex = (modeIndex + 1) % MODES.length;

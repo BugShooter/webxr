@@ -18,6 +18,7 @@
 
         // Menu placement (meters from head)
         menuDistance: 3.0,
+        menuYOffset: 0.0,
 
         altFadeEnabled: true,
         fadeProfiles: [
@@ -104,6 +105,8 @@
       dot: null,
       activeController: null,
     };
+
+    const POINTER_LOCAL = { x: 0, y: 0, z: -0.035 };
 
     function status(msg) {
       if (log) log(msg);
@@ -242,7 +245,8 @@
       const placePanel = (panel) => {
         // farther away to reduce vergence strain; scaled up for readability
         const z = -Base.clamp(runtime.settings.menuDistance ?? 3.0, 1.2, 6.0);
-        panel.position.set(0, 0, z);
+        const y = Base.clamp(runtime.settings.menuYOffset ?? 0.0, -0.8, 0.8);
+        panel.position.set(0, y, z);
         panel.rotation.x = 0.08;
         panel.scale.setScalar(1.4);
         camera.add(panel);
@@ -259,10 +263,17 @@
       }
     }
 
-    function applyMenuDistance() {
+    function applyMenuPlacement() {
       const z = -Base.clamp(runtime.settings.menuDistance ?? 3.0, 1.2, 6.0);
-      if (trainerMenu.panel) trainerMenu.panel.position.z = z;
-      if (settingsMenu.panel) settingsMenu.panel.position.z = z;
+      const y = Base.clamp(runtime.settings.menuYOffset ?? 0.0, -0.8, 0.8);
+      if (trainerMenu.panel) {
+        trainerMenu.panel.position.z = z;
+        trainerMenu.panel.position.y = y;
+      }
+      if (settingsMenu.panel) {
+        settingsMenu.panel.position.z = z;
+        settingsMenu.panel.position.y = y;
+      }
     }
 
     function openTrainerMenu() {
@@ -288,6 +299,10 @@
       if (settingsMenu.panel) settingsMenu.panel.visible = false;
       trainerMenu.open = false;
       settingsMenu.open = false;
+
+      if (laser.dot) laser.dot.visible = false;
+      if (laser.line0) laser.line0.visible = false;
+      if (laser.line1) laser.line1.visible = false;
     }
 
     function activeMenu() {
@@ -489,9 +504,13 @@
     function ensureLaser() {
       if (!laser.dot) {
         const geom = new THREE.SphereGeometry(0.01, 10, 10);
-        const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95 });
+        mat.depthTest = false;
         laser.dot = new THREE.Mesh(geom, mat);
         laser.dot.layers.set(0);
+        laser.dot.layers.enable(1);
+        laser.dot.layers.enable(2);
+        laser.dot.renderOrder = 1001;
         laser.dot.visible = false;
         scene.add(laser.dot);
       }
@@ -500,8 +519,12 @@
         const geom = new THREE.BufferGeometry();
         geom.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, -1], 3));
         const mat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 });
+        mat.depthTest = false;
         const line = new THREE.Line(geom, mat);
         line.layers.set(0);
+        line.layers.enable(1);
+        line.layers.enable(2);
+        line.position.set(POINTER_LOCAL.x, POINTER_LOCAL.y, POINTER_LOCAL.z);
         line.visible = false;
         return line;
       };
@@ -531,9 +554,12 @@
       const tryController = (controller, line) => {
         if (!controller) return null;
 
-        const origin = new THREE.Vector3();
-        origin.setFromMatrixPosition(controller.matrixWorld);
-        const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(controller.quaternion).normalize();
+        const origin = new THREE.Vector3(POINTER_LOCAL.x, POINTER_LOCAL.y, POINTER_LOCAL.z);
+        controller.localToWorld(origin);
+
+        const q = new THREE.Quaternion();
+        controller.getWorldQuaternion(q);
+        const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(q).normalize();
 
         raycaster.set(origin, dir);
         const hits = raycaster.intersectObject(panel, true);
@@ -583,16 +609,24 @@
       const menuState = activeMenu();
       if (!menuState) return;
 
-      // While any menu is open: right stick Y moves the menu closer/farther
-      // (push up = farther).
-      if (Math.abs(input.axesR.y) > 0.35) {
+      // While any menu is open: LEFT stick moves the menu placement
+      // - X: depth (far/near)
+      // - Y: height
+      if (Math.abs(input.axesL.x) > 0.12) {
         runtime.settings.menuDistance = Base.clamp(
-          (runtime.settings.menuDistance ?? 3.0) - input.axesR.y * 1.6 * dt,
+          (runtime.settings.menuDistance ?? 3.0) + input.axesL.x * 1.6 * dt,
           1.2,
           6.0
         );
-        applyMenuDistance();
       }
+      if (Math.abs(input.axesL.y) > 0.12) {
+        runtime.settings.menuYOffset = Base.clamp(
+          (runtime.settings.menuYOffset ?? 0.0) - input.axesL.y * 1.2 * dt,
+          -0.8,
+          0.8
+        );
+      }
+      applyMenuPlacement();
 
       const items = menuState === trainerMenu ? trainerMenuItems() : settingsMenuItems();
 
@@ -704,7 +738,7 @@
         const mesh = new THREE.Mesh(geom, mat);
         // Cone axis is +Y; rotate to point forward (-Z)
         mesh.rotation.x = -Math.PI / 2;
-        mesh.position.set(0, -0.01, -0.035);
+        mesh.position.set(POINTER_LOCAL.x, POINTER_LOCAL.y, POINTER_LOCAL.z);
         mesh.layers.set(0);
         return mesh;
       };
@@ -752,17 +786,31 @@
         if (startBtn) startBtn.disabled = false;
         disposeActiveTrainer();
 
-        if (menu.panel) {
+        const panels = [trainerMenu.panel, settingsMenu.panel];
+        for (const p of panels) {
+          if (!p) continue;
           try {
-            camera.remove(menu.panel);
-            const mat = menu.panel.material;
+            camera.remove(p);
+            const mat = p.material;
             if (mat?.map) mat.map.dispose?.();
             mat?.dispose?.();
-            menu.panel.geometry?.dispose?.();
+            p.geometry?.dispose?.();
           } catch (e) {
             console.warn(e);
           }
-          menu.panel = null;
+        }
+        trainerMenu.panel = null;
+        settingsMenu.panel = null;
+
+        if (laser.dot) {
+          try {
+            scene.remove(laser.dot);
+            laser.dot.material?.dispose?.();
+            laser.dot.geometry?.dispose?.();
+          } catch (e) {
+            console.warn(e);
+          }
+          laser.dot = null;
         }
       });
 
@@ -793,12 +841,11 @@
         } else {
           // Global unified controls (when menu is closed)
           // - Left stick Y: height
-          // - Right stick Y: distance
-          // - Right stick X: scale
+          // - Left stick X: depth (distance)
+          // Right stick is reserved for trainer-specific controls.
           if (dt > 0) {
             runtime.settings.height = Base.clamp(runtime.settings.height - input.axesL.y * 0.9 * dt, 0.7, 2.2);
-            runtime.settings.distance = Base.clamp(runtime.settings.distance - input.axesR.y * 0.9 * dt, 0.6, 4.0);
-            runtime.settings.scale = Base.clamp(runtime.settings.scale + input.axesR.x * 0.9 * dt, 0.6, 2.2);
+            runtime.settings.distance = Base.clamp(runtime.settings.distance + input.axesL.x * 0.9 * dt, 0.6, 4.0);
           }
 
           // let trainer run
