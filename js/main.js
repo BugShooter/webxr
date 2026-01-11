@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const BUILD = 'v0.8.6 (2026-01-11)';
+  const BUILD = 'v0.8.7 (2026-01-11)';
 
   const canvas = document.getElementById('glCanvas');
   const startBtn = document.getElementById('startBtn');

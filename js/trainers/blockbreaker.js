@@ -36,6 +36,11 @@
     let ballVY = 0.65;
     let ballStuck = true;
 
+    // Diagnostics
+    let frameId = 0;
+    let lastErr = '';
+    let lastErrAtMs = -1e9;
+
     let blocks = [];
     let powerups = [];
 
@@ -308,14 +313,15 @@
       update({ t, dt, input, settings, fade }) {
         if (!boardGroup) return;
 
+        frameId++;
         const tSec = t;
+        const nowMs = performance.now();
 
         // Serve/restart
         // Primary: Right trigger (edge) and/or WebXR select (trigger). Fallback: A.
         if (input?.justTriggerR || input?.justSelect || input?.justA) {
-          const now = performance.now();
-          if (now - lastServeAtMs > 250) {
-            lastServeAtMs = now;
+          if (nowMs - lastServeAtMs > 250) {
+            lastServeAtMs = nowMs;
             if (lives <= 0) {
               score = 0;
               lives = 3;
@@ -346,14 +352,17 @@
         paddle.mesh.left.position.set(paddleX, paddleY, 0);
         paddle.mesh.right.position.set(paddleX, paddleY, 0);
 
-        // Ball movement
-        if (dt > 0) {
-          if (ballStuck) {
-            ballX = paddleX;
-            ballY = paddleY + 0.12;
-          } else {
-            ballX += ballVX * dt;
-            ballY += ballVY * dt;
+        let chain = null;
+        try {
+
+          // Ball movement
+          if (dt > 0) {
+            if (ballStuck) {
+              ballX = paddleX;
+              ballY = paddleY + 0.12;
+            } else {
+              ballX += ballVX * dt;
+              ballY += ballVY * dt;
 
             const minX = -BOARD_W / 2 + ballR;
             const maxX = BOARD_W / 2 - ballR;
@@ -368,85 +377,86 @@
               ballX = maxX;
               ballVX *= -1;
             }
-            if (ballY > maxY) {
-              ballY = maxY;
-              ballVY *= -1;
-            }
+              if (ballY > maxY) {
+                ballY = maxY;
+                ballVY *= -1;
+              }
 
             // Paddle collision
-            const hitPaddle = collideBallWithAabb(ballX, ballY, ballR, paddleX, paddleY, paddleW, paddleH);
-            if (hitPaddle && ballVY < 0 && hitPaddle.axis === 'y') {
-              ballY = paddleY + paddleH / 2 + ballR;
-              const hit = Base.clamp((ballX - paddleX) / (paddleW / 2), -1, 1);
-              const angle = (Math.PI / 2) + hit * (Math.PI / 3);
-              const speed = 0.92;
-              ballVX = Math.cos(angle) * speed;
-              ballVY = Math.sin(angle) * speed;
-            }
+              const hitPaddle = collideBallWithAabb(ballX, ballY, ballR, paddleX, paddleY, paddleW, paddleH);
+              if (hitPaddle && ballVY < 0 && hitPaddle.axis === 'y') {
+                ballY = paddleY + paddleH / 2 + ballR;
+                const hit = Base.clamp((ballX - paddleX) / (paddleW / 2), -1, 1);
+                const angle = (Math.PI / 2) + hit * (Math.PI / 3);
+                const speed = 0.92;
+                ballVX = Math.cos(angle) * speed;
+                ballVY = Math.sin(angle) * speed;
+              }
 
             // Block collisions
-            for (const b of blocks) {
-              if (!b.alive) continue;
-              const hit = collideBallWithAabb(ballX, ballY, ballR, b.x, b.y, b.w, b.h);
-              if (!hit) continue;
-              b.alive = false;
-              score += 10;
-              boardGroup.remove(b.mesh.left);
-              boardGroup.remove(b.mesh.right);
-              disposeDual(b.mesh);
-              maybeSpawnPowerup(b.x, b.y);
-              if (hit.axis === 'x') ballVX *= -1;
-              else ballVY *= -1;
-              break;
-            }
-
-            if (blocks.length > 0 && blocks.every((b) => !b.alive)) {
-              buildBlocks();
-              resetBall(true);
-            }
-
-            if (ballY < minY) {
-              lives--;
-              if (lives <= 0) {
-                cleanupPowerups();
+              for (const b of blocks) {
+                if (!b.alive) continue;
+                const hit = collideBallWithAabb(ballX, ballY, ballR, b.x, b.y, b.w, b.h);
+                if (!hit) continue;
+                b.alive = false;
+                score += 10;
+                boardGroup.remove(b.mesh.left);
+                boardGroup.remove(b.mesh.right);
+                disposeDual(b.mesh);
+                maybeSpawnPowerup(b.x, b.y);
+                if (hit.axis === 'x') ballVX *= -1;
+                else ballVY *= -1;
+                break;
               }
-              resetBall(true);
+
+              if (blocks.length > 0 && blocks.every((b) => !b.alive)) {
+                buildBlocks();
+                resetBall(true);
+              }
+
+              if (ballY < minY) {
+                lives--;
+                if (lives <= 0) {
+                  cleanupPowerups();
+                }
+                resetBall(true);
+              }
             }
           }
-        }
 
-        ball.mesh.left.position.set(ballX, ballY, 0);
-        ball.mesh.right.position.set(ballX, ballY, 0);
+          ball.mesh.left.position.set(ballX, ballY, 0);
+          ball.mesh.right.position.set(ballX, ballY, 0);
 
-        // Powerups
-        for (let i = powerups.length - 1; i >= 0; i--) {
-          const p = powerups[i];
-          p.y += p.vy * dt;
-          p.mesh.left.position.set(p.x, p.y, 0);
-          p.mesh.right.position.set(p.x, p.y, 0);
+          // Powerups
+          for (let i = powerups.length - 1; i >= 0; i--) {
+            const p = powerups[i];
+            p.y += p.vy * dt;
+            p.mesh.left.position.set(p.x, p.y, 0);
+            p.mesh.right.position.set(p.x, p.y, 0);
 
-          const caught = Math.abs(p.x - paddleX) < paddleW / 2 + 0.04 && Math.abs(p.y - paddleY) < paddleH / 2 + 0.05;
-          if (caught) {
-            widenUntilMs = performance.now() + 10000;
-            score += 25;
-            boardGroup.remove(p.mesh.left);
-            boardGroup.remove(p.mesh.right);
-            disposeDual(p.mesh);
-            powerups.splice(i, 1);
-            continue;
+            const caught =
+              Math.abs(p.x - paddleX) < paddleW / 2 + 0.04 && Math.abs(p.y - paddleY) < paddleH / 2 + 0.05;
+            if (caught) {
+              widenUntilMs = nowMs + 10000;
+              score += 25;
+              boardGroup.remove(p.mesh.left);
+              boardGroup.remove(p.mesh.right);
+              disposeDual(p.mesh);
+              powerups.splice(i, 1);
+              continue;
+            }
+
+            if (p.y < -BOARD_H / 2 - 0.25) {
+              boardGroup.remove(p.mesh.left);
+              boardGroup.remove(p.mesh.right);
+              disposeDual(p.mesh);
+              powerups.splice(i, 1);
+            }
           }
 
-          if (p.y < -BOARD_H / 2 - 0.25) {
-            boardGroup.remove(p.mesh.left);
-            boardGroup.remove(p.mesh.right);
-            disposeDual(p.mesh);
-            powerups.splice(i, 1);
-          }
-        }
-
-        // Apply the requested fade chain (4-phase profile, staged across elements)
-        const chain = chainFade(settings, tSec);
-        const stage = chain.stage;
+          // Apply the requested fade chain (4-phase profile, staged across elements)
+          chain = chainFade(settings, tSec);
+          const stage = chain.stage;
 
         const applyToPaddle = stage === 0 || stage === 1 || stage === 4 || stage === 5;
         const applyToBall = stage === 2 || stage === 3 || stage === 4 || stage === 5;
@@ -471,13 +481,17 @@
           setOpacity(b.mesh.right, blocksR);
         }
 
-        for (const p of powerups) {
-          setOpacity(p.mesh.left, blocksL);
-          setOpacity(p.mesh.right, blocksR);
+          for (const p of powerups) {
+            setOpacity(p.mesh.left, blocksL);
+            setOpacity(p.mesh.right, blocksR);
+          }
+        } catch (e) {
+          const msg = e?.stack || e?.message || String(e);
+          lastErr = String(msg).slice(0, 260);
+          lastErrAtMs = nowMs;
         }
 
         // HUD
-        const nowMs = performance.now();
         if (hudPanel && nowMs - hudLastUpdateAtMs > 250) {
           const widenTxt = nowMs < widenUntilMs ? 'WIDE ✅' : '—';
 
@@ -485,7 +499,14 @@
           const ballTxt = ballStuck ? 'READY (stuck)' : 'MOVING';
 
           const prof = currentFadeProfile(settings);
-          const fadeTxt = settings?.altFadeEnabled ? `${prof?.name || 'profile'}  |  Stage: ${chain.label}` : 'OFF';
+          const stageLabel = chain?.label || '—';
+          const fadeTxt = settings?.altFadeEnabled ? `${prof?.name || 'profile'}  |  Stage: ${stageLabel}` : 'OFF';
+
+          const inputsTxt = `input jTr:${!!input?.justTriggerR} jSel:${!!input?.justSelect} jA:${!!input?.justA}`;
+          const stateTxt = `f:${frameId} dt:${(dt || 0).toFixed(4)} stuck:${ballStuck} serveAge:${Math.max(0, nowMs - lastServeAtMs).toFixed(0)}ms`;
+          const posTxt = `paddleX:${paddleX.toFixed(3)} ballX:${ballX.toFixed(3)} ballY:${ballY.toFixed(3)}`;
+          const velTxt = `vx:${(ballVX || 0).toFixed(3)} vy:${(ballVY || 0).toFixed(3)}`;
+          const errTxt = nowMs - lastErrAtMs < 5000 ? `ERR: ${lastErr}` : 'ERR: —';
 
           const txt =
             `Тренажёр: Block Breaker\n` +
@@ -493,6 +514,11 @@
             `Move paddle: Right stick X\n` +
             `Menu: Left grip\n` +
             `${hintServe}   |   Ball: ${ballTxt}\n` +
+            `${inputsTxt}\n` +
+            `${stateTxt}\n` +
+            `${posTxt}\n` +
+            `${velTxt}\n` +
+            `${errTxt}\n` +
             `Score: ${score}   Lives: ${lives}   Power: ${widenTxt}`;
 
           Base.updateHudPanel(THREE, hudState, hudPanel, txt, lives <= 0 ? '#7a1f1f' : '#222222');
