@@ -465,12 +465,12 @@
         const paddleL = applyToPaddle ? chain.l : 1;
         const paddleR = applyToPaddle ? chain.r : 1;
         const ballL = applyToBall ? chain.l : 1;
-        const ballR = applyToBall ? chain.r : 1;
+        const ballOpacityR = applyToBall ? chain.r : 1;
         const blocksL = applyToBlocks ? chain.l : 1;
         const blocksR = applyToBlocks ? chain.r : 1;
 
         setOpacity(ball.mesh.left, ballL);
-        setOpacity(ball.mesh.right, ballR);
+        setOpacity(ball.mesh.right, ballOpacityR);
 
         setOpacity(paddle.mesh.left, paddleL);
         setOpacity(paddle.mesh.right, paddleR);
