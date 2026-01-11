@@ -311,7 +311,8 @@
         const tSec = t;
 
         // Serve/restart
-        if (input?.justSelect) {
+        // Primary: WebXR select (trigger). Fallback: A.
+        if (input?.justSelect || input?.justA) {
           const now = performance.now();
           if (now - lastServeAtMs > 250) {
             lastServeAtMs = now;
@@ -479,7 +480,8 @@
         if (hudPanel && nowMs - hudLastUpdateAtMs > 250) {
           const widenTxt = nowMs < widenUntilMs ? 'WIDE ✅' : '—';
 
-          const hintServe = lives <= 0 ? 'Trigger: restart' : ballStuck ? 'Trigger: serve' : 'Trigger: —';
+          const hintServe = lives <= 0 ? 'Trigger/A: restart' : ballStuck ? 'Trigger/A: serve' : 'Trigger/A: —';
+          const ballTxt = ballStuck ? 'READY (stuck)' : 'MOVING';
 
           const prof = currentFadeProfile(settings);
           const fadeTxt = settings?.altFadeEnabled ? `${prof?.name || 'profile'}  |  Stage: ${chain.label}` : 'OFF';
@@ -489,7 +491,7 @@
             `ALT fade (global): ${fadeTxt}\n` +
             `Move paddle: Right stick X\n` +
             `Menu: Left grip\n` +
-            `${hintServe}\n` +
+            `${hintServe}   |   Ball: ${ballTxt}\n` +
             `Score: ${score}   Lives: ${lives}   Power: ${widenTxt}`;
 
           Base.updateHudPanel(THREE, hudState, hudPanel, txt, lives <= 0 ? '#7a1f1f' : '#222222');

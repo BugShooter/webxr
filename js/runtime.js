@@ -24,6 +24,8 @@
         fadeProfiles: [
           { name: 'Always ON (no ALT)', onMs: 999999, fadeOutMs: 0, offMs: 0, fadeInMs: 0 },
           { name: 'ALT: on400 out200 off200 in400', onMs: 400, fadeOutMs: 200, offMs: 200, fadeInMs: 400 },
+          { name: 'ALT: on1000 out500 off2000 in500', onMs: 1000, fadeOutMs: 500, offMs: 2000, fadeInMs: 500 },
+          { name: 'ALT: on1000 out500 off3000 in500', onMs: 1000, fadeOutMs: 500, offMs: 3000, fadeInMs: 500 },
         ],
         fadeProfileIndex: 0,
       },
