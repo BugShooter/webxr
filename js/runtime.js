@@ -26,11 +26,6 @@
           { name: 'ALT: on400 out200 off200 in400', onMs: 400, fadeOutMs: 200, offMs: 200, fadeInMs: 400 },
         ],
         fadeProfileIndex: 0,
-
-        // BlockBreaker: how global ALT fade applies to paddle vs ball
-        // - same: both fade in the same eye at the same time
-        // - opposite: paddle uses swapped eye envelope relative to ball
-        bbPaddleBallCoupling: 'same',
       },
       input: null,
       menu: null,
@@ -372,12 +367,6 @@
 
     function settingsMenuItems() {
       const p = currentFadeProfile();
-      const bbMode = runtime.settings.bbPaddleBallCoupling === 'opposite' ? 'Opposite eyes' : 'Same eye';
-      const bbItem = {
-        kind: 'bbCoupling',
-        label: `BlockBreaker: Paddle+Ball fade: ${bbMode} (Trigger: toggle)`,
-      };
-
       const profileLabel =
         `Fade profile: ${p?.name || '—'} ` +
         `[ON ${p.onMs} OUT ${p.fadeOutMs} OFF ${p.offMs} IN ${p.fadeInMs}] (Trigger: next)`;
@@ -385,7 +374,6 @@
       return [
         { kind: 'altEnabled', label: `ALT fade: ${runtime.settings.altFadeEnabled ? 'ON' : 'OFF'} (Trigger: toggle)` },
         { kind: 'profile', label: profileLabel },
-        ...(runtime.activeTrainerId === 'blockbreaker' ? [bbItem] : []),
         { kind: 'timing_on', label: `Timing ON: ${p.onMs} ms (Adjust: right stick X)` },
         { kind: 'timing_out', label: `Timing OUT: ${p.fadeOutMs} ms (Adjust: right stick X)` },
         { kind: 'timing_off', label: `Timing OFF: ${p.offMs} ms (Adjust: right stick X)` },
@@ -426,12 +414,6 @@
 
       if (item.kind === 'profile') {
         runtime.settings.fadeProfileIndex = (runtime.settings.fadeProfileIndex + 1) % runtime.settings.fadeProfiles.length;
-        return;
-      }
-
-      if (item.kind === 'bbCoupling') {
-        runtime.settings.bbPaddleBallCoupling =
-          runtime.settings.bbPaddleBallCoupling === 'opposite' ? 'same' : 'opposite';
         return;
       }
 
@@ -661,10 +643,18 @@
         return { hoveredIndex: itemLine };
       };
 
-      // prefer right controller for pointing
+      // prefer right controller for pointing (by handedness)
       laser.dot.visible = false;
-      const r = tryController(controller1, laser.line1);
-      const l = r ? null : tryController(controller0, laser.line0);
+      const rightCtrl = runtime.controllers?.right || controller1;
+      const leftCtrl = runtime.controllers?.left || controller0;
+
+      const lineFor = (ctrl) => (ctrl === controller0 ? laser.line0 : ctrl === controller1 ? laser.line1 : null);
+
+      const rLine = lineFor(rightCtrl) || laser.line1;
+      const lLine = lineFor(leftCtrl) || laser.line0;
+
+      const r = tryController(rightCtrl, rLine);
+      const l = r ? null : tryController(leftCtrl, lLine);
 
       if (laser.line0) laser.line0.visible = !!menuState.open;
       if (laser.line1) laser.line1.visible = !!menuState.open;
@@ -819,20 +809,37 @@
       controller0.add(makeControllerViz());
       controller1.add(makeControllerViz());
 
+      // Track handedness mapping (controller indices are not guaranteed to be left/right).
+      const onConnected = (controller) => (e) => {
+        const h = e?.data?.handedness;
+        if (h === 'left' || h === 'right') {
+          controller.userData.handedness = h;
+          runtime.controllers = runtime.controllers || { left: null, right: null };
+          runtime.controllers[h] = controller;
+        }
+      };
+      controller0.addEventListener('connected', onConnected(controller0));
+      controller1.addEventListener('connected', onConnected(controller1));
+
       controller0.addEventListener('selectstart', () => {
         input.justSelect = true;
       });
       controller1.addEventListener('selectstart', () => {
         input.justSelect = true;
       });
-      controller0.addEventListener('squeezestart', () => {
+      const onSqueezeStart = (controller) => () => {
         input.justSqueeze = true;
-        input.justSqueezeL = true;
-      });
-      controller1.addEventListener('squeezestart', () => {
-        input.justSqueeze = true;
-        input.justSqueezeR = true;
-      });
+        const h = controller.userData?.handedness;
+        if (h === 'left') input.justSqueezeL = true;
+        else if (h === 'right') input.justSqueezeR = true;
+        else {
+          // Fallback: assume controller0 is left if unknown
+          if (controller === controller0) input.justSqueezeL = true;
+          if (controller === controller1) input.justSqueezeR = true;
+        }
+      };
+      controller0.addEventListener('squeezestart', onSqueezeStart(controller0));
+      controller1.addEventListener('squeezestart', onSqueezeStart(controller1));
 
       scene.add(controller0);
       scene.add(controller1);

@@ -11,21 +11,10 @@
     const paddleY = -BOARD_H / 2 + 0.10;
     const ballR = 0.035;
 
-    // Controls
-    const PULSE_PERIODS = [0.6, 1.0, 1.6, 2.4];
-
-    const VIS_PRESETS = [
-      { name: 'Ball=L  Paddle=R  Prizes=Both  Blocks=Alt', ball: 'left', paddle: 'right', prizes: 'both', blocks: 'alt' },
-      { name: 'Ball=Both  Paddle=Both  Prizes=Both  Blocks=Alt', ball: 'both', paddle: 'both', prizes: 'both', blocks: 'alt' },
-      { name: 'Ball=Alt  Paddle=Alt  Prizes=Both  Blocks=Alt', ball: 'alt', paddle: 'alt', prizes: 'both', blocks: 'alt' },
-      { name: 'Everything=Both  Blocks=StaticMix', ball: 'both', paddle: 'both', prizes: 'both', blocks: 'staticMix' },
-    ];
-
-    const BLOCK_PROGRAMS = [
-      { id: 'alt', name: 'Alt (plateau + fade)', period: 2.8 },
-      { id: 'cross', name: 'Crossfade', period: 2.2 },
-      { id: 'staticMix', name: 'Static mix', period: 1.0 },
-    ];
+    // This trainer is intentionally simplified:
+    // - Uses the global 4-phase ALT fade profile (ON / OUT / OFF / IN)
+    // - Applies it in a fixed chain across elements:
+    //   Paddle L, Paddle R, Ball L, Ball R, Paddle+Ball L, Paddle+Ball R, Blocks L, Blocks R, repeat.
 
     // Runtime state
     let THREE;
@@ -36,12 +25,6 @@
     let hudPanel;
     const hudState = { hudLastText: '', hudLastBg: '' };
     let hudLastUpdateAtMs = 0;
-
-    let pulseEnabled = false;
-    let pulsePeriodIndex = 1;
-
-    let presetIndex = 0;
-    let blockProgramIndex = 0;
 
     // Game state
     let paddleW = 0.42;
@@ -64,10 +47,6 @@
     // Mesh handles
     let paddle;
     let ball;
-
-    function pulsePeriodSeconds() {
-      return PULSE_PERIODS[pulsePeriodIndex] || 1.0;
-    }
 
     function clamp01(v) {
       return Math.max(0, Math.min(1, v));
@@ -98,72 +77,66 @@
       boardGroup.add(dual.right);
     }
 
-    function currentPreset() {
-      return VIS_PRESETS[presetIndex] || VIS_PRESETS[0];
+    function currentFadeProfile(settings) {
+      const arr = settings?.fadeProfiles;
+      const idx = settings?.fadeProfileIndex || 0;
+      if (!Array.isArray(arr) || arr.length === 0) return null;
+      return arr[idx] || arr[0];
     }
 
-    function currentBlockProgramId() {
-      const p = BLOCK_PROGRAMS[blockProgramIndex] || BLOCK_PROGRAMS[0];
-      return p.id;
+    function envelopeFromProfile(p, tInStage) {
+      if (!p) return 1;
+      const on = Math.max(0.0001, (p.onMs || 0) / 1000);
+      const out = Math.max(0, (p.fadeOutMs || 0) / 1000);
+      const off = Math.max(0, (p.offMs || 0) / 1000);
+      const inn = Math.max(0, (p.fadeInMs || 0) / 1000);
+
+      if (tInStage < on) return 1;
+      const t1 = tInStage - on;
+      if (t1 < out && out > 1e-6) {
+        const k = t1 / out;
+        return 1 - Base.easeOutCubic(k);
+      }
+      const t2 = t1 - out;
+      if (t2 < off) return 0;
+      const t3 = t2 - off;
+      if (t3 < inn && inn > 1e-6) {
+        const k = t3 / inn;
+        return Base.easeOutCubic(k);
+      }
+      return 1;
     }
 
-    function eyeOpacitiesFromMode(mode, tSec, phase = 0) {
-      if (mode === 'left') return { l: 1, r: 0 };
-      if (mode === 'right') return { l: 0, r: 1 };
-      if (mode === 'both') return { l: 1, r: 1 };
+    function chainFade(settings, tSec) {
+      if (!settings?.altFadeEnabled) return { stage: 0, l: 1, r: 1, label: 'OFF', stageLen: 0 };
 
-      // ALT: plateau at 1, then fade one eye to 0, restore, fade the other.
-      const period = 2.6;
-      const p = ((tSec + phase) / period) % 1;
-      if (p < 0.25) return { l: 1, r: 1 };
-      if (p < 0.5) {
-        const u = (p - 0.25) / 0.25;
-        return { l: 1 - Base.easeOutCubic(u), r: 1 };
-      }
-      if (p < 0.75) return { l: 1, r: 1 };
-      const u = (p - 0.75) / 0.25;
-      return { l: 1, r: 1 - Base.easeOutCubic(u) };
-    }
+      const p = currentFadeProfile(settings);
+      const on = Math.max(0.0001, (p?.onMs || 0) / 1000);
+      const out = Math.max(0, (p?.fadeOutMs || 0) / 1000);
+      const off = Math.max(0, (p?.offMs || 0) / 1000);
+      const inn = Math.max(0, (p?.fadeInMs || 0) / 1000);
+      const stageLen = on + out + off + inn;
+      if (!isFinite(stageLen) || stageLen <= 0.0002) return { stage: 0, l: 1, r: 1, label: 'ON', stageLen: 0 };
 
-    function eyeOpacitiesForBlock(block, tSec) {
-      const programId = currentPreset().blocks === 'staticMix' ? 'staticMix' : currentBlockProgramId();
+      const stage = Math.floor(tSec / stageLen) % 8;
+      const u = ((tSec % stageLen) + stageLen) % stageLen;
+      const env = 0.05 + 0.95 * envelopeFromProfile(p, u);
 
-      if (programId === 'staticMix') {
-        if (block.eye === 'left') return { l: 1, r: 0 };
-        if (block.eye === 'right') return { l: 0, r: 1 };
-        return { l: 1, r: 1 };
-      }
+      const isLeftEyeStage = stage % 2 === 0;
+      const l = isLeftEyeStage ? env : 1;
+      const r = isLeftEyeStage ? 1 : env;
 
-      if (programId === 'cross') {
-        const period = (BLOCK_PROGRAMS[blockProgramIndex] || BLOCK_PROGRAMS[0]).period || 2.2;
-        const p = ((tSec + block.phase) / period) % 1;
-        const s = 0.5 + 0.5 * Math.sin(p * Math.PI * 2);
-        const l = 0.15 + 0.85 * s;
-        const r = 0.15 + 0.85 * (1 - s);
-        return { l, r };
-      }
-
-      const period = (BLOCK_PROGRAMS[blockProgramIndex] || BLOCK_PROGRAMS[0]).period || 2.8;
-      const p = ((tSec + block.phase) / period) % 1;
-      if (p < 0.25) return { l: 1, r: 1 };
-      if (p < 0.5) {
-        const u = (p - 0.25) / 0.25;
-        return { l: 1 - Base.easeOutCubic(u), r: 1 };
-      }
-      if (p < 0.75) return { l: 1, r: 1 };
-      const u = (p - 0.75) / 0.25;
-      return { l: 1, r: 1 - Base.easeOutCubic(u) };
-    }
-
-    function localPulse(tSec) {
-      if (!pulseEnabled) return { l: 1, r: 1 };
-
-      const period = pulsePeriodSeconds();
-      const half = period / 2;
-      const phaseIndex = Math.floor(tSec / half) % 2;
-      const localT = (tSec % half) / half;
-      const pulseAlpha = 0.05 + 0.95 * Base.easeOutCubic(localT);
-      return { l: phaseIndex === 0 ? pulseAlpha : 1, r: phaseIndex === 1 ? pulseAlpha : 1 };
+      const labels = [
+        'Paddle L',
+        'Paddle R',
+        'Ball L',
+        'Ball R',
+        'Paddle+Ball L',
+        'Paddle+Ball R',
+        'Blocks L',
+        'Blocks R',
+      ];
+      return { stage, l, r, label: labels[stage] || '—', stageLen };
     }
 
     function resetBall(stickToPaddle = true) {
@@ -209,7 +182,7 @@
           const eyeRand = Math.random();
           const eye = eyeRand < 0.34 ? 'left' : eyeRand < 0.67 ? 'right' : 'both';
 
-          blocks.push({ x, y, w: blockW, h: blockH, alive: true, mesh: dual, phase: Math.random() * 10, eye });
+          blocks.push({ x, y, w: blockW, h: blockH, alive: true, mesh: dual, eye });
         }
       }
     }
@@ -336,7 +309,6 @@
         if (!boardGroup) return;
 
         const tSec = t;
-        const pulse = localPulse(tSec);
 
         // Serve/restart
         if (input?.justSelect) {
@@ -356,11 +328,7 @@
           }
         }
 
-        // Buttons
-        if (input?.justX) presetIndex = (presetIndex + 1) % VIS_PRESETS.length;
-        if (input?.justY) blockProgramIndex = (blockProgramIndex + 1) % BLOCK_PROGRAMS.length;
-        if (input?.justA) pulseEnabled = !pulseEnabled;
-        if (input?.justB) pulsePeriodIndex = (pulsePeriodIndex + 1) % PULSE_PERIODS.length;
+        // No extra modes: keep this trainer focused.
 
         // Paddle movement
         const stickX = input?.axesR?.x || 0;
@@ -474,49 +442,51 @@
           }
         }
 
-        // Apply dichoptic visibility (local + global ALT fade)
-        const preset = currentPreset();
-        const ballEye = eyeOpacitiesFromMode(preset.ball, tSec, 0.0);
-        const paddleEye = eyeOpacitiesFromMode(preset.paddle, tSec, 0.35);
-        const prizeEye = eyeOpacitiesFromMode(preset.prizes, tSec, 0.7);
+        // Apply the requested fade chain (4-phase profile, staged across elements)
+        const chain = chainFade(settings, tSec);
+        const stage = chain.stage;
 
-        const coupling = settings?.bbPaddleBallCoupling || 'same';
-        const paddleFade = coupling === 'opposite' ? { l: fade.r, r: fade.l } : fade;
+        const applyToPaddle = stage === 0 || stage === 1 || stage === 4 || stage === 5;
+        const applyToBall = stage === 2 || stage === 3 || stage === 4 || stage === 5;
+        const applyToBlocks = stage === 6 || stage === 7;
 
-        setOpacity(ball.mesh.left, ballEye.l * pulse.l * fade.l);
-        setOpacity(ball.mesh.right, ballEye.r * pulse.r * fade.r);
+        const paddleL = applyToPaddle ? chain.l : 1;
+        const paddleR = applyToPaddle ? chain.r : 1;
+        const ballL = applyToBall ? chain.l : 1;
+        const ballR = applyToBall ? chain.r : 1;
+        const blocksL = applyToBlocks ? chain.l : 1;
+        const blocksR = applyToBlocks ? chain.r : 1;
 
-        setOpacity(paddle.mesh.left, paddleEye.l * pulse.l * paddleFade.l);
-        setOpacity(paddle.mesh.right, paddleEye.r * pulse.r * paddleFade.r);
+        setOpacity(ball.mesh.left, ballL);
+        setOpacity(ball.mesh.right, ballR);
+
+        setOpacity(paddle.mesh.left, paddleL);
+        setOpacity(paddle.mesh.right, paddleR);
 
         for (const b of blocks) {
           if (!b.alive) continue;
-          const o = eyeOpacitiesForBlock(b, tSec);
-          setOpacity(b.mesh.left, o.l * pulse.l * fade.l);
-          setOpacity(b.mesh.right, o.r * pulse.r * fade.r);
+          setOpacity(b.mesh.left, blocksL);
+          setOpacity(b.mesh.right, blocksR);
         }
 
         for (const p of powerups) {
-          setOpacity(p.mesh.left, prizeEye.l * pulse.l * fade.l);
-          setOpacity(p.mesh.right, prizeEye.r * pulse.r * fade.r);
+          setOpacity(p.mesh.left, blocksL);
+          setOpacity(p.mesh.right, blocksR);
         }
 
         // HUD
         const nowMs = performance.now();
         if (hudPanel && nowMs - hudLastUpdateAtMs > 250) {
-                    const coupleTxt = coupling === 'opposite' ? 'Opposite eyes' : 'Same eye';
-          const pulseTxt = pulseEnabled ? `ON (${pulsePeriodSeconds().toFixed(1)}s)` : 'OFF';
           const widenTxt = nowMs < widenUntilMs ? 'WIDE ✅' : '—';
-          const prog = BLOCK_PROGRAMS[blockProgramIndex] || BLOCK_PROGRAMS[0];
 
           const hintServe = lives <= 0 ? 'Trigger: restart' : ballStuck ? 'Trigger: serve' : 'Trigger: —';
 
+          const prof = currentFadeProfile(settings);
+          const fadeTxt = settings?.altFadeEnabled ? `${prof?.name || 'profile'}  |  Stage: ${chain.label}` : 'OFF';
+
           const txt =
             `Тренажёр: Block Breaker\n` +
-            `Preset: ${preset.name}  (X)\n` +
-            `Blocks: ${prog.name}  (Y)\n` +
-            `Pulse (local): ${pulseTxt} (A/B)\n` +
-            `Paddle+Ball fade: ${coupleTxt} (Menu → Settings)\n` +
+            `ALT fade (global): ${fadeTxt}\n` +
             `Move paddle: Right stick X\n` +
             `Menu: Left grip\n` +
             `${hintServe}\n` +
