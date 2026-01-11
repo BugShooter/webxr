@@ -480,11 +480,14 @@
         const paddleEye = eyeOpacitiesFromMode(preset.paddle, tSec, 0.35);
         const prizeEye = eyeOpacitiesFromMode(preset.prizes, tSec, 0.7);
 
+        const coupling = settings?.bbPaddleBallCoupling || 'same';
+        const paddleFade = coupling === 'opposite' ? { l: fade.r, r: fade.l } : fade;
+
         setOpacity(ball.mesh.left, ballEye.l * pulse.l * fade.l);
         setOpacity(ball.mesh.right, ballEye.r * pulse.r * fade.r);
 
-        setOpacity(paddle.mesh.left, paddleEye.l * pulse.l * fade.l);
-        setOpacity(paddle.mesh.right, paddleEye.r * pulse.r * fade.r);
+        setOpacity(paddle.mesh.left, paddleEye.l * pulse.l * paddleFade.l);
+        setOpacity(paddle.mesh.right, paddleEye.r * pulse.r * paddleFade.r);
 
         for (const b of blocks) {
           if (!b.alive) continue;
@@ -501,6 +504,7 @@
         // HUD
         const nowMs = performance.now();
         if (hudPanel && nowMs - hudLastUpdateAtMs > 250) {
+                    const coupleTxt = coupling === 'opposite' ? 'Opposite eyes' : 'Same eye';
           const pulseTxt = pulseEnabled ? `ON (${pulsePeriodSeconds().toFixed(1)}s)` : 'OFF';
           const widenTxt = nowMs < widenUntilMs ? 'WIDE ✅' : '—';
           const prog = BLOCK_PROGRAMS[blockProgramIndex] || BLOCK_PROGRAMS[0];
@@ -512,8 +516,9 @@
             `Preset: ${preset.name}  (X)\n` +
             `Blocks: ${prog.name}  (Y)\n` +
             `Pulse (local): ${pulseTxt} (A/B)\n` +
-            `Move paddle: Left stick X\n` +
-            `Menu: use menu button\n` +
+            `Paddle+Ball fade: ${coupleTxt} (Menu → Settings)\n` +
+            `Move paddle: Right stick X\n` +
+            `Menu: Left grip\n` +
             `${hintServe}\n` +
             `Score: ${score}   Lives: ${lives}   Power: ${widenTxt}`;
 

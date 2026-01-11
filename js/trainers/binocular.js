@@ -327,7 +327,7 @@
             `Тренажёр: Binocular MVP\n` +
             `Режим: ${modeNow} (X)   |   Split-фигура: ${shape} (Y)\n` +
             `Пульсация (local): ${pulse} (A/B)   |   Вращение: ${rotTxt} (Grip)\n` +
-            `Disparity: left stick X   |   Global: sticks (Height/Dist/Scale)\n` +
+            `Disparity: right stick X   |   Global: left stick (Height/Dist)\n` +
             `Dist: ${settings.distance.toFixed(2)}m  Height: ${settings.height.toFixed(2)}m  Scale: ${settings.scale.toFixed(2)}\n` +
             `|dx|: ${Math.abs(disparityX).toFixed(3)}m   Счёт: ${score}/${trials}   |   ${hint}`;
 

@@ -22,10 +22,15 @@
 
         altFadeEnabled: true,
         fadeProfiles: [
-          { name: 'Always ON', onMs: 999999, fadeOutMs: 0, offMs: 0, fadeInMs: 0 },
-          { name: 'Alt 400/200/200/400', onMs: 400, fadeOutMs: 200, offMs: 200, fadeInMs: 400 },
+          { name: 'Always ON (no ALT)', onMs: 999999, fadeOutMs: 0, offMs: 0, fadeInMs: 0 },
+          { name: 'ALT: on400 out200 off200 in400', onMs: 400, fadeOutMs: 200, offMs: 200, fadeInMs: 400 },
         ],
         fadeProfileIndex: 0,
+
+        // BlockBreaker: how global ALT fade applies to paddle vs ball
+        // - same: both fade in the same eye at the same time
+        // - opposite: paddle uses swapped eye envelope relative to ball
+        bbPaddleBallCoupling: 'same',
       },
       input: null,
       menu: null,
@@ -68,6 +73,9 @@
 
       justSelect: false,
       justSqueeze: false,
+
+      justSqueezeL: false,
+      justSqueezeR: false,
 
       justTriggerR: false,
 
@@ -229,7 +237,6 @@
       if (input.gpL) {
         // Use *digital* press only to avoid random toggles from analog-valued buttons.
         menuNow =
-          buttonPressedDigital(input.gpL, 3) ||
           buttonPressedDigital(input.gpL, 9) ||
           buttonPressedDigital(input.gpL, 8) ||
           buttonPressedDigital(input.gpL, 7) ||
@@ -365,9 +372,20 @@
 
     function settingsMenuItems() {
       const p = currentFadeProfile();
+      const bbMode = runtime.settings.bbPaddleBallCoupling === 'opposite' ? 'Opposite eyes' : 'Same eye';
+      const bbItem = {
+        kind: 'bbCoupling',
+        label: `BlockBreaker: Paddle+Ball fade: ${bbMode} (Trigger: toggle)`,
+      };
+
+      const profileLabel =
+        `Fade profile: ${p?.name || '—'} ` +
+        `[ON ${p.onMs} OUT ${p.fadeOutMs} OFF ${p.offMs} IN ${p.fadeInMs}] (Trigger: next)`;
+
       return [
         { kind: 'altEnabled', label: `ALT fade: ${runtime.settings.altFadeEnabled ? 'ON' : 'OFF'} (Trigger: toggle)` },
-        { kind: 'profile', label: `Fade profile: ${p?.name || '—'} (Trigger: next)` },
+        { kind: 'profile', label: profileLabel },
+        ...(runtime.activeTrainerId === 'blockbreaker' ? [bbItem] : []),
         { kind: 'timing_on', label: `Timing ON: ${p.onMs} ms (Adjust: right stick X)` },
         { kind: 'timing_out', label: `Timing OUT: ${p.fadeOutMs} ms (Adjust: right stick X)` },
         { kind: 'timing_off', label: `Timing OFF: ${p.offMs} ms (Adjust: right stick X)` },
@@ -408,6 +426,12 @@
 
       if (item.kind === 'profile') {
         runtime.settings.fadeProfileIndex = (runtime.settings.fadeProfileIndex + 1) % runtime.settings.fadeProfiles.length;
+        return;
+      }
+
+      if (item.kind === 'bbCoupling') {
+        runtime.settings.bbPaddleBallCoupling =
+          runtime.settings.bbPaddleBallCoupling === 'opposite' ? 'same' : 'opposite';
         return;
       }
 
@@ -522,7 +546,7 @@
 
       const lines = [];
       lines.push(`${title} (Build ${build || ''})`);
-      lines.push('Point + Trigger to select.  Menu button to close.');
+      lines.push('Point + Trigger to select.  Left grip to close.');
       lines.push('Adjust (settings): Right stick X');
       lines.push('');
 
@@ -781,11 +805,15 @@
       const makeControllerViz = () => {
         const geom = new THREE.ConeGeometry(0.02, 0.06, 10);
         const mat = new THREE.MeshStandardMaterial({ color: 0xdddddd, emissive: 0x111111, emissiveIntensity: 0.35 });
+        // Keep controllers visible even when HUD uses depthTest=false.
+        mat.depthTest = false;
+        mat.depthWrite = false;
         const mesh = new THREE.Mesh(geom, mat);
         // Cone axis is +Y; rotate to point forward (-Z)
         mesh.rotation.x = -Math.PI / 2;
         mesh.position.set(POINTER_LOCAL.x, POINTER_LOCAL.y, POINTER_LOCAL.z);
         mesh.layers.set(0);
+        mesh.renderOrder = 2000;
         return mesh;
       };
       controller0.add(makeControllerViz());
@@ -799,9 +827,11 @@
       });
       controller0.addEventListener('squeezestart', () => {
         input.justSqueeze = true;
+        input.justSqueezeL = true;
       });
       controller1.addEventListener('squeezestart', () => {
         input.justSqueeze = true;
+        input.justSqueezeR = true;
       });
 
       scene.add(controller0);
@@ -877,7 +907,8 @@
 
         updateInput(session);
 
-        if (input.justMenu) {
+        // Preferred: left grip (squeeze) to toggle menu.
+        if (input.justSqueezeL || input.justMenu) {
           if (trainerMenu.open || settingsMenu.open) closeMenus();
           else openTrainerMenu();
         }
@@ -932,6 +963,8 @@
         // Reset one-shot flags
         input.justSelect = false;
         input.justSqueeze = false;
+        input.justSqueezeL = false;
+        input.justSqueezeR = false;
 
         input.justTriggerR = false;
 
