@@ -324,7 +324,8 @@
               buildBlocks();
               resetBall(true);
             } else if (ballStuck) {
-              ballStuck = false;
+              // Reinitialize velocity on every serve to avoid rare zero/NaN velocity states.
+              resetBall(false);
             }
           }
         }
