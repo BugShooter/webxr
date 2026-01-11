@@ -311,8 +311,8 @@
         const tSec = t;
 
         // Serve/restart
-        // Primary: WebXR select (trigger). Fallback: A.
-        if (input?.justSelect || input?.justA) {
+        // Primary: Right trigger (edge) and/or WebXR select (trigger). Fallback: A.
+        if (input?.justTriggerR || input?.justSelect || input?.justA) {
           const now = performance.now();
           if (now - lastServeAtMs > 250) {
             lastServeAtMs = now;
