@@ -116,7 +116,16 @@
       requiredFeatures: requiredFeatures || ['local-floor'],
     });
 
-    await renderer.xr.setSession(session);
+    try {
+      await renderer.xr.setSession(session);
+    } catch (error) {
+      try {
+        await session.end();
+      } catch (endError) {
+        console.warn(endError);
+      }
+      throw error;
+    }
     if (container) container.style.display = 'none';
     if (log) log('✅ VR активен!');
 

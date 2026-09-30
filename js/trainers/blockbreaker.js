@@ -159,6 +159,7 @@
       for (const b of blocks) {
         if (b.mesh?.left) boardGroup.remove(b.mesh.left);
         if (b.mesh?.right) boardGroup.remove(b.mesh.right);
+        disposeDual(b.mesh);
       }
       blocks = [];
 
@@ -234,6 +235,7 @@
       for (const p of powerups) {
         if (p.mesh?.left) boardGroup.remove(p.mesh.left);
         if (p.mesh?.right) boardGroup.remove(p.mesh.right);
+        disposeDual(p.mesh);
       }
       powerups = [];
     }

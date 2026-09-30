@@ -730,6 +730,47 @@
       runtime.activeTrainerId = null;
     }
 
+    function disposeRuntime() {
+      renderer?.setAnimationLoop(null);
+      disposeActiveTrainer();
+
+      if (scene) {
+        const geometries = new Set();
+        const materials = new Set();
+        const textures = new Set();
+
+        scene.traverse((object) => {
+          if (object.geometry) geometries.add(object.geometry);
+          const objectMaterials = Array.isArray(object.material) ? object.material : [object.material];
+          for (const material of objectMaterials) {
+            if (!material) continue;
+            materials.add(material);
+            for (const value of Object.values(material)) {
+              if (value?.isTexture) textures.add(value);
+            }
+          }
+        });
+
+        for (const texture of textures) texture.dispose();
+        for (const material of materials) material.dispose();
+        for (const geometry of geometries) geometry.dispose();
+        scene.clear();
+      }
+
+      renderer?.dispose();
+      scene = null;
+      camera = null;
+      renderer = null;
+      controller0 = null;
+      controller1 = null;
+      runtime.controllers = null;
+      trainerMenu.panel = null;
+      settingsMenu.panel = null;
+      laser.dot = null;
+      laser.line0 = null;
+      laser.line1 = null;
+    }
+
     function setTrainer(id) {
       const reg = window.WebXRTrainers || {};
       const factory = reg[id];
@@ -847,14 +888,19 @@
     }
 
     async function start() {
-      initThreeJS();
-
-      const session = await Base.requestAndStartXRSession({
-        renderer,
-        container,
-        log,
-        requiredFeatures: ['local-floor'],
-      });
+      let session;
+      try {
+        initThreeJS();
+        session = await Base.requestAndStartXRSession({
+          renderer,
+          container,
+          log,
+          requiredFeatures: ['local-floor'],
+        });
+      } catch (error) {
+        disposeRuntime();
+        throw error;
+      }
 
       runtime.endSession = () => {
         try {
@@ -868,35 +914,8 @@
         status('VR завершён');
         if (container) container.style.display = 'block';
         if (startBtn) startBtn.disabled = false;
-        disposeActiveTrainer();
-
-        const panels = [trainerMenu.panel, settingsMenu.panel];
-        for (const p of panels) {
-          if (!p) continue;
-          try {
-            camera.remove(p);
-            const mat = p.material;
-            if (mat?.map) mat.map.dispose?.();
-            mat?.dispose?.();
-            p.geometry?.dispose?.();
-          } catch (e) {
-            console.warn(e);
-          }
-        }
-        trainerMenu.panel = null;
-        settingsMenu.panel = null;
-
-        if (laser.dot) {
-          try {
-            scene.remove(laser.dot);
-            laser.dot.material?.dispose?.();
-            laser.dot.geometry?.dispose?.();
-          } catch (e) {
-            console.warn(e);
-          }
-          laser.dot = null;
-        }
-      });
+        disposeRuntime();
+      }, { once: true });
 
       // Create menu panel (hidden)
       ensureMenuPanels();
