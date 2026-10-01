@@ -60,8 +60,9 @@
     let controller1;
     let desktopEyes = null;
     let resizeHandler = null;
-    let desktopHandlers = null;
-    const desktopKeys = new Set();
+    let inputAdapter = null;
+    let desktopPointerMoveHandler = null;
+    let menuAdjustAtMs = -1e9;
     const desktopPointer = { x: window.innerWidth * 0.75, y: window.innerHeight * 0.5 };
 
     // Input state (normalized)
@@ -92,10 +93,6 @@
       justSqueezeR: false,
 
       justTriggerR: false,
-
-      _prev: { a: false, b: false, x: false, y: false, menu: false, triggerR: false },
-      _debounce: { navAtMs: -1e9, adjustAtMs: -1e9, menuAtMs: -1e9 },
-      _hold: { yDownAtMs: null, yUsedForMenu: false },
     };
     runtime.input = input;
 
@@ -207,102 +204,6 @@
     }
 
     runtime.getAltFade = getAltFade;
-
-    function readStick(gamepad) {
-      const axes = gamepad?.axes || [];
-      let x = 0;
-      let y = 0;
-      if (axes.length >= 4) {
-        x = axes[2];
-        y = axes[3];
-      } else if (axes.length >= 2) {
-        x = axes[0];
-        y = axes[1];
-      }
-      x = Base.deadzone(x, 0.12);
-      y = Base.deadzone(y, 0.12);
-      return { x, y };
-    }
-
-    function updateInput(session) {
-      input.gpL = Base.getGamepad(session, 'left');
-      input.gpR = Base.getGamepad(session, 'right');
-
-      input.axesL = input.gpL ? readStick(input.gpL) : { x: 0, y: 0 };
-      input.axesR = input.gpR ? readStick(input.gpR) : { x: 0, y: 0 };
-
-      // Keep existing mapping used earlier in this project
-      const aNow = input.gpR ? Base.buttonPressed(input.gpR, 4) : false;
-      const bNow = input.gpR ? Base.buttonPressed(input.gpR, 5) : false;
-      const xNow = input.gpL ? Base.buttonPressed(input.gpL, 4) : false;
-      const yNow = input.gpL ? Base.buttonPressed(input.gpL, 5) : false;
-
-      // Right trigger (R index 0) as an explicit edge-trigger for in-trainer actions.
-      const triggerRNow = input.gpR ? Base.buttonPressed(input.gpR, 0) : false;
-
-      const buttonPressedDigital = (gp, idx) => {
-        const b = gp?.buttons?.[idx];
-        return !!(b && b.pressed);
-      };
-
-      // Menu button (Quest): prefer dedicated "menu" button indices.
-      // IMPORTANT: do NOT use thumbstick click (often button index 2), per user request.
-      let menuNow = false;
-      if (input.gpL) {
-        // Use *digital* press only to avoid random toggles from analog-valued buttons.
-        menuNow =
-          buttonPressedDigital(input.gpL, 9) ||
-          buttonPressedDigital(input.gpL, 8) ||
-          buttonPressedDigital(input.gpL, 7) ||
-          buttonPressedDigital(input.gpL, 6);
-      }
-
-      // Fallback: long-hold Y toggles menu (useful if system menu button isn't exposed).
-      const nowMs = performance.now();
-      let menuFromHold = false;
-      if (yNow && !input._prev.y) {
-        input._hold.yDownAtMs = nowMs;
-        input._hold.yUsedForMenu = false;
-      }
-      if (!yNow) {
-        input._hold.yDownAtMs = null;
-        input._hold.yUsedForMenu = false;
-      }
-      if (yNow && input._hold.yDownAtMs != null && !input._hold.yUsedForMenu) {
-        if (nowMs - input._hold.yDownAtMs > 450) {
-          menuFromHold = true;
-          input._hold.yUsedForMenu = true;
-        }
-      }
-
-      input.justA = aNow && !input._prev.a;
-      input.justB = bNow && !input._prev.b;
-      input.justX = xNow && !input._prev.x;
-      input.justY = yNow && !input._prev.y;
-      input.justMenu = (menuNow && !input._prev.menu) || menuFromHold;
-
-      input.justTriggerR = triggerRNow && !input._prev.triggerR;
-
-      // Debounce menu toggles to prevent accidental double-toggles
-      if (input.justMenu) {
-        if (nowMs - input._debounce.menuAtMs < 350) input.justMenu = false;
-        else input._debounce.menuAtMs = nowMs;
-      }
-
-      input.a = aNow;
-      input.b = bNow;
-      input.x = xNow;
-      input.y = yNow;
-      input.menu = menuNow;
-
-      input._prev.a = aNow;
-      input._prev.b = bNow;
-      input._prev.x = xNow;
-      input._prev.y = yNow;
-      input._prev.menu = menuNow;
-
-      input._prev.triggerR = triggerRNow;
-    }
 
     function ensureMenuPanels() {
       const placePanel = (panel) => {
@@ -469,8 +370,8 @@
 
     function adjustMenuValue(kind, deltaX) {
       const now = performance.now();
-      if (now - input._debounce.adjustAtMs < 90) return;
-      input._debounce.adjustAtMs = now;
+      if (now - menuAdjustAtMs < 90) return;
+      menuAdjustAtMs = now;
 
       const stepMs = deltaX > 0 ? 50 : -50;
       const stepF = deltaX > 0 ? 0.05 : -0.05;
@@ -753,13 +654,9 @@
       disposeActiveTrainer();
 
       if (resizeHandler) window.removeEventListener('resize', resizeHandler);
-      if (desktopHandlers) {
-        canvas.removeEventListener('pointermove', desktopHandlers.onPointerMove);
-        canvas.removeEventListener('pointerdown', desktopHandlers.onPointerDown);
-        window.removeEventListener('keydown', desktopHandlers.onKeyDown);
-        window.removeEventListener('keyup', desktopHandlers.onKeyUp);
-        window.removeEventListener('blur', desktopHandlers.onBlur);
-      }
+      inputAdapter?.dispose?.();
+      inputAdapter = null;
+      if (desktopPointerMoveHandler) canvas.removeEventListener('pointermove', desktopPointerMoveHandler);
 
       if (scene) {
         const geometries = new Set();
@@ -798,8 +695,7 @@
       laser.line1 = null;
       desktopEyes = null;
       resizeHandler = null;
-      desktopHandlers = null;
-      desktopKeys.clear();
+      desktopPointerMoveHandler = null;
     }
 
     function setTrainer(id) {
@@ -952,62 +848,13 @@
       resizeRenderer();
 
       if (desktopMode) {
-        const controlCodes = new Set([
-          'KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
-          'KeyQ', 'KeyX', 'KeyY', 'KeyB', 'Space',
-        ]);
-        const onPointerMove = (event) => {
+        desktopPointerMoveHandler = (event) => {
           const bounds = canvas.getBoundingClientRect();
           desktopPointer.x = event.clientX - bounds.left;
           desktopPointer.y = event.clientY - bounds.top;
         };
-        const onPointerDown = (event) => {
-          if (event.button !== 0) return;
-          event.preventDefault();
-          input.justSelect = true;
-          input.justTriggerR = true;
-        };
-        const onKeyDown = (event) => {
-          if (!controlCodes.has(event.code)) return;
-          event.preventDefault();
-          desktopKeys.add(event.code);
-          if (event.repeat) return;
-          if (event.code === 'KeyQ') {
-            input.justSqueeze = true;
-            input.justSqueezeL = true;
-          } else if (event.code === 'KeyX') input.justX = true;
-          else if (event.code === 'KeyY') input.justY = true;
-          else if (event.code === 'KeyB') input.justB = true;
-          else if (event.code === 'Space') {
-            input.justA = true;
-            input.justTriggerR = true;
-            input.justSelect = true;
-          }
-        };
-        const onKeyUp = (event) => desktopKeys.delete(event.code);
-        const onBlur = () => desktopKeys.clear();
-
-        desktopHandlers = { onPointerMove, onPointerDown, onKeyDown, onKeyUp, onBlur };
-        canvas.addEventListener('pointermove', onPointerMove);
-        canvas.addEventListener('pointerdown', onPointerDown);
-        window.addEventListener('keydown', onKeyDown);
-        window.addEventListener('keyup', onKeyUp);
-        window.addEventListener('blur', onBlur);
+        canvas.addEventListener('pointermove', desktopPointerMoveHandler);
       }
-    }
-
-    function updateDesktopInput() {
-      const pressed = (code) => desktopKeys.has(code) ? 1 : 0;
-      input.gpL = null;
-      input.gpR = null;
-      input.axesL = {
-        x: pressed('KeyD') - pressed('KeyA'),
-        y: pressed('KeyS') - pressed('KeyW'),
-      };
-      input.axesR = {
-        x: pressed('ArrowRight') - pressed('ArrowLeft'),
-        y: pressed('ArrowDown') - pressed('ArrowUp'),
-      };
     }
 
     function updateDesktopControllerPose() {
@@ -1056,6 +903,11 @@
       let session;
       try {
         initThreeJS();
+        const inputAdapters = window.WebXRInputAdapters;
+        if (!inputAdapters) throw new Error('Input adapters not loaded');
+        inputAdapter = desktopMode
+          ? inputAdapters.createDesktop({ input, canvas })
+          : inputAdapters.createVR({ input, Base });
         if (!desktopMode) {
           session = await Base.requestAndStartXRSession({
             renderer,
@@ -1115,12 +967,8 @@
         const dt = lastTimeMs ? (timeMs - lastTimeMs) / 1000 : 0;
         lastTimeMs = timeMs;
 
-        if (desktopMode) {
-          updateDesktopInput();
-          updateDesktopControllerPose();
-        } else {
-          updateInput(session);
-        }
+        inputAdapter.poll(session);
+        if (desktopMode) updateDesktopControllerPose();
 
         // Preferred: left grip (squeeze) to toggle menu.
         if (input.justSqueezeL || input.justMenu) {
