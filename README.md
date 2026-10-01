@@ -26,6 +26,10 @@ Block Breaker (trainer):
 - **Right stick X**: move paddle
 - **Right trigger** (or **A**): serve / restart
 
+## Try online
+
+Open [WebXR Trainers on GitHub Pages](https://bugshooter.github.io/webxr/) in a WebXR-capable browser, including Quest Browser. Start VR to open the trainer menu and choose an exercise there. The hosted page uses HTTPS, which is required for immersive WebXR.
+
 ## Desktop stereo preview
 
 Choose **Open stereo preview** to run without WebXR. The browser shows separate left- and right-eye views side by side; this is a development preview, not a substitute for a headset.
@@ -64,7 +68,7 @@ Notes:
 
 ## Project structure
 
-- `index.html` — entry page (trainer selection + start button)
+- `index.html` — entry page (VR and desktop preview launch buttons)
 - `js/main.js` — bootstraps the runtime (and shows the Build string)
 - `js/runtime.js` — shared XR runtime (scene/camera/renderer, controllers, menus, ALT fade)
 - `js/base.js` — helpers (HUD panels, easing, input helpers)
