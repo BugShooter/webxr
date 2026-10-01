@@ -26,6 +26,18 @@ Block Breaker (trainer):
 - **Right stick X**: move paddle
 - **Right trigger** (or **A**): serve / restart
 
+## Desktop stereo preview
+
+Choose **Open stereo preview** to run without WebXR. The browser shows separate left- and right-eye views side by side; this is a development preview, not a substitute for a headset.
+
+- **Mouse move**: point the simulated right controller
+- **Click**: trigger / select
+- **WASD**: left stick
+- **Arrow keys**: right stick
+- **Q**: left grip (VR menu)
+- **Space**: A / right trigger
+- **X / Y / B**: controller buttons
+
 ## Settings
 
 Open the menu → **Settings**:

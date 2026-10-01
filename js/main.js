@@ -5,6 +5,10 @@
 
   const canvas = document.getElementById('glCanvas');
   const startBtn = document.getElementById('startBtn');
+  const desktopBtn = document.getElementById('desktopBtn');
+  const desktopControls = document.getElementById('desktopControls');
+  const desktopExitBtn = document.getElementById('desktopExitBtn');
+  const eyeLabels = document.getElementById('eyeLabels');
   const statusDiv = document.getElementById('status');
   const container = document.getElementById('container');
   const trainerSelect = document.getElementById('trainerSelect');
@@ -37,6 +41,7 @@
         startBtn,
         container,
         statusDiv,
+        mode: 'vr',
         log,
         build: BUILD,
         initialTrainerId: trainerId,
@@ -47,6 +52,37 @@
       startBtn.disabled = false;
     }
   }
+
+  let stopDesktopPreview = null;
+
+  async function startDesktopPreview() {
+    try {
+      desktopBtn.disabled = true;
+      const handle = await window.WebXRRuntime.start({
+        canvas,
+        startBtn,
+        desktopBtn,
+        desktopControls,
+        eyeLabels,
+        container,
+        statusDiv,
+        mode: 'desktop',
+        log,
+        build: BUILD,
+        initialTrainerId: getSelectedTrainerId(),
+      });
+      stopDesktopPreview = handle?.end || null;
+    } catch (err) {
+      console.error(err);
+      log('❌ Ошибка desktop preview: ' + (err?.message || String(err)));
+      desktopBtn.disabled = false;
+    }
+  }
+
+  desktopExitBtn.addEventListener('click', () => {
+    stopDesktopPreview?.();
+    stopDesktopPreview = null;
+  });
 
   async function checkSupport() {
     if (!navigator.xr) {
@@ -70,5 +106,6 @@
   }
 
   startBtn.addEventListener('click', startXR);
+  desktopBtn.addEventListener('click', startDesktopPreview);
   checkSupport();
 })();

@@ -1,9 +1,22 @@
 (function () {
   'use strict';
 
-  function startRuntime({ canvas, startBtn, container, statusDiv, log, build, initialTrainerId }) {
+  function startRuntime({
+    canvas,
+    startBtn,
+    desktopBtn,
+    desktopControls,
+    eyeLabels,
+    container,
+    statusDiv,
+    log,
+    build,
+    initialTrainerId,
+    mode = 'vr',
+  }) {
     const THREE = window.THREE;
     const Base = window.WebXRBase;
+    const desktopMode = mode === 'desktop';
 
     if (!THREE || !Base) throw new Error('THREE/Base not loaded');
 
@@ -45,6 +58,11 @@
 
     let controller0;
     let controller1;
+    let desktopEyes = null;
+    let resizeHandler = null;
+    let desktopHandlers = null;
+    const desktopKeys = new Set();
+    const desktopPointer = { x: window.innerWidth * 0.75, y: window.innerHeight * 0.5 };
 
     // Input state (normalized)
     const input = {
@@ -734,6 +752,15 @@
       renderer?.setAnimationLoop(null);
       disposeActiveTrainer();
 
+      if (resizeHandler) window.removeEventListener('resize', resizeHandler);
+      if (desktopHandlers) {
+        canvas.removeEventListener('pointermove', desktopHandlers.onPointerMove);
+        canvas.removeEventListener('pointerdown', desktopHandlers.onPointerDown);
+        window.removeEventListener('keydown', desktopHandlers.onKeyDown);
+        window.removeEventListener('keyup', desktopHandlers.onKeyUp);
+        window.removeEventListener('blur', desktopHandlers.onBlur);
+      }
+
       if (scene) {
         const geometries = new Set();
         const materials = new Set();
@@ -769,6 +796,10 @@
       laser.dot = null;
       laser.line0 = null;
       laser.line1 = null;
+      desktopEyes = null;
+      resizeHandler = null;
+      desktopHandlers = null;
+      desktopKeys.clear();
     }
 
     function setTrainer(id) {
@@ -796,6 +827,22 @@
 
     runtime.setTrainer = setTrainer;
 
+    function resizeRenderer() {
+      if (!renderer || !camera) return;
+      const width = Math.max(1, window.innerWidth);
+      const height = Math.max(1, window.innerHeight);
+      renderer.setSize(width, height);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      if (desktopEyes) {
+        const eyeAspect = (width / 2) / height;
+        for (const eyeCamera of desktopEyes) {
+          eyeCamera.aspect = eyeAspect;
+          eyeCamera.updateProjectionMatrix();
+        }
+      }
+    }
+
     function initThreeJS() {
       scene = new THREE.Scene();
       scene.background = new THREE.Color(0x0a0a0a);
@@ -805,10 +852,24 @@
       // Needed so camera-attached UI (menu panel) is part of the scene graph
       scene.add(camera);
 
+      if (desktopMode) {
+        const eyeAspect = (window.innerWidth / 2) / Math.max(1, window.innerHeight);
+        const leftEye = new THREE.PerspectiveCamera(75, eyeAspect, 0.1, 100);
+        const rightEye = new THREE.PerspectiveCamera(75, eyeAspect, 0.1, 100);
+        leftEye.position.x = -0.032;
+        rightEye.position.x = 0.032;
+        leftEye.layers.set(0);
+        leftEye.layers.enable(1);
+        rightEye.layers.set(0);
+        rightEye.layers.enable(2);
+        camera.add(leftEye, rightEye);
+        desktopEyes = [leftEye, rightEye];
+      }
+
       renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
       renderer.setPixelRatio(window.devicePixelRatio);
       renderer.setSize(window.innerWidth, window.innerHeight);
-      renderer.xr.enabled = true;
+      renderer.xr.enabled = !desktopMode;
 
       scene.add(new THREE.AmbientLight(0xffffff, 0.85));
       const light1 = new THREE.DirectionalLight(0xffffff, 0.6);
@@ -885,37 +946,159 @@
 
       scene.add(controller0);
       scene.add(controller1);
+
+      resizeHandler = resizeRenderer;
+      window.addEventListener('resize', resizeHandler);
+      resizeRenderer();
+
+      if (desktopMode) {
+        const controlCodes = new Set([
+          'KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+          'KeyQ', 'KeyX', 'KeyY', 'KeyB', 'Space',
+        ]);
+        const onPointerMove = (event) => {
+          const bounds = canvas.getBoundingClientRect();
+          desktopPointer.x = event.clientX - bounds.left;
+          desktopPointer.y = event.clientY - bounds.top;
+        };
+        const onPointerDown = (event) => {
+          if (event.button !== 0) return;
+          event.preventDefault();
+          input.justSelect = true;
+          input.justTriggerR = true;
+        };
+        const onKeyDown = (event) => {
+          if (!controlCodes.has(event.code)) return;
+          event.preventDefault();
+          desktopKeys.add(event.code);
+          if (event.repeat) return;
+          if (event.code === 'KeyQ') {
+            input.justSqueeze = true;
+            input.justSqueezeL = true;
+          } else if (event.code === 'KeyX') input.justX = true;
+          else if (event.code === 'KeyY') input.justY = true;
+          else if (event.code === 'KeyB') input.justB = true;
+          else if (event.code === 'Space') {
+            input.justA = true;
+            input.justTriggerR = true;
+            input.justSelect = true;
+          }
+        };
+        const onKeyUp = (event) => desktopKeys.delete(event.code);
+        const onBlur = () => desktopKeys.clear();
+
+        desktopHandlers = { onPointerMove, onPointerDown, onKeyDown, onKeyUp, onBlur };
+        canvas.addEventListener('pointermove', onPointerMove);
+        canvas.addEventListener('pointerdown', onPointerDown);
+        window.addEventListener('keydown', onKeyDown);
+        window.addEventListener('keyup', onKeyUp);
+        window.addEventListener('blur', onBlur);
+      }
+    }
+
+    function updateDesktopInput() {
+      const pressed = (code) => desktopKeys.has(code) ? 1 : 0;
+      input.gpL = null;
+      input.gpR = null;
+      input.axesL = {
+        x: pressed('KeyD') - pressed('KeyA'),
+        y: pressed('KeyS') - pressed('KeyW'),
+      };
+      input.axesR = {
+        x: pressed('ArrowRight') - pressed('ArrowLeft'),
+        y: pressed('ArrowDown') - pressed('ArrowUp'),
+      };
+    }
+
+    function updateDesktopControllerPose() {
+      if (!desktopEyes || !controller0 || !controller1) return;
+      const bounds = canvas.getBoundingClientRect();
+      const width = Math.max(1, bounds.width);
+      const height = Math.max(1, bounds.height);
+      const x = Base.clamp(desktopPointer.x, 0, width);
+      const y = Base.clamp(desktopPointer.y, 0, height);
+      const eyeIndex = x < width / 2 ? 0 : 1;
+      const eyeCamera = desktopEyes[eyeIndex];
+      const eyeX = eyeIndex === 0 ? x : x - width / 2;
+      const ndcX = (eyeX / (width / 2)) * 2 - 1;
+      const ndcY = 1 - (y / height) * 2;
+
+      eyeCamera.updateMatrixWorld(true);
+      const origin = eyeCamera.getWorldPosition(new THREE.Vector3());
+      const direction = new THREE.Vector3(ndcX, ndcY, 0.5).unproject(eyeCamera).sub(origin).normalize();
+      controller1.position.copy(origin).addScaledVector(direction, 0.08);
+      controller1.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), direction);
+
+      camera.updateMatrixWorld(true);
+      const leftHandPosition = camera.localToWorld(new THREE.Vector3(-0.22, -0.2, -0.55));
+      controller0.position.copy(leftHandPosition);
+      controller0.quaternion.copy(camera.getWorldQuaternion(new THREE.Quaternion()));
+    }
+
+    function renderDesktopStereo() {
+      const width = Math.max(1, window.innerWidth);
+      const height = Math.max(1, window.innerHeight);
+      const leftWidth = Math.floor(width / 2);
+      const rightWidth = width - leftWidth;
+
+      renderer.setScissorTest(true);
+      renderer.setViewport(0, 0, leftWidth, height);
+      renderer.setScissor(0, 0, leftWidth, height);
+      renderer.render(scene, desktopEyes[0]);
+      renderer.setViewport(leftWidth, 0, rightWidth, height);
+      renderer.setScissor(leftWidth, 0, rightWidth, height);
+      renderer.render(scene, desktopEyes[1]);
+      renderer.setScissorTest(false);
+      renderer.setViewport(0, 0, width, height);
     }
 
     async function start() {
       let session;
       try {
         initThreeJS();
-        session = await Base.requestAndStartXRSession({
-          renderer,
-          container,
-          log,
-          requiredFeatures: ['local-floor'],
-        });
+        if (!desktopMode) {
+          session = await Base.requestAndStartXRSession({
+            renderer,
+            container,
+            log,
+            requiredFeatures: ['local-floor'],
+          });
+        }
       } catch (error) {
         disposeRuntime();
         throw error;
       }
 
       runtime.endSession = () => {
+        if (desktopMode) {
+          disposeRuntime();
+          if (container) container.style.display = 'block';
+          if (desktopControls) desktopControls.hidden = true;
+          if (eyeLabels) eyeLabels.hidden = true;
+          if (desktopBtn) desktopBtn.disabled = false;
+          status('Desktop stereo завершён');
+          return;
+        }
         try {
-          session.end();
+          session?.end();
         } catch (e) {
           console.warn(e);
         }
       };
 
-      session.addEventListener('end', () => {
-        status('VR завершён');
-        if (container) container.style.display = 'block';
-        if (startBtn) startBtn.disabled = false;
-        disposeRuntime();
-      }, { once: true });
+      if (desktopMode) {
+        if (container) container.style.display = 'none';
+        if (desktopControls) desktopControls.hidden = false;
+        if (eyeLabels) eyeLabels.hidden = false;
+        status('Desktop stereo активен');
+      } else {
+        session.addEventListener('end', () => {
+          status('VR завершён');
+          if (container) container.style.display = 'block';
+          if (startBtn) startBtn.disabled = false;
+          disposeRuntime();
+        }, { once: true });
+      }
 
       // Create menu panel (hidden)
       ensureMenuPanels();
@@ -932,7 +1115,12 @@
         const dt = lastTimeMs ? (timeMs - lastTimeMs) / 1000 : 0;
         lastTimeMs = timeMs;
 
-        updateInput(session);
+        if (desktopMode) {
+          updateDesktopInput();
+          updateDesktopControllerPose();
+        } else {
+          updateInput(session);
+        }
 
         // Preferred: left grip (squeeze) to toggle menu.
         if (input.justSqueezeL || input.justMenu) {
@@ -976,15 +1164,17 @@
         }
 
         // Set per-eye layers
-        const xrCamera = renderer.xr.getCamera(camera);
-        if (xrCamera && xrCamera.isArrayCamera && xrCamera.cameras && xrCamera.cameras.length >= 2) {
-          xrCamera.cameras[0].layers.enable(0);
-          xrCamera.cameras[0].layers.enable(1);
-          xrCamera.cameras[0].layers.disable(2);
+        if (!desktopMode) {
+          const xrCamera = renderer.xr.getCamera(camera);
+          if (xrCamera && xrCamera.isArrayCamera && xrCamera.cameras && xrCamera.cameras.length >= 2) {
+            xrCamera.cameras[0].layers.enable(0);
+            xrCamera.cameras[0].layers.enable(1);
+            xrCamera.cameras[0].layers.disable(2);
 
-          xrCamera.cameras[1].layers.enable(0);
-          xrCamera.cameras[1].layers.enable(2);
-          xrCamera.cameras[1].layers.disable(1);
+            xrCamera.cameras[1].layers.enable(0);
+            xrCamera.cameras[1].layers.enable(2);
+            xrCamera.cameras[1].layers.disable(1);
+          }
         }
 
         // Reset one-shot flags
@@ -992,13 +1182,18 @@
         input.justSqueeze = false;
         input.justSqueezeL = false;
         input.justSqueezeR = false;
-
+        input.justA = false;
+        input.justB = false;
+        input.justX = false;
+        input.justY = false;
+        input.justMenu = false;
         input.justTriggerR = false;
 
-        renderer.render(scene, camera);
+        if (desktopMode) renderDesktopStereo();
+        else renderer.render(scene, camera);
       });
 
-      return session;
+      return desktopMode ? { end: runtime.endSession } : session;
     }
 
     return start();
