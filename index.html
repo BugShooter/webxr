@@ -158,17 +158,8 @@
     <div id="container">
         <h1>🥽 WebXR Trainers</h1>
         <p>
-            Выберите тренажёр и запустите VR.<br>
-            Внутри VR подсказки будут на HUD.
-        </p>
-
-        <p style="margin-bottom: 12px;">
-            <label for="trainerSelect">Тренажёр:</label>
-            <select id="trainerSelect" style="margin-left: 8px; padding: 8px 10px; border-radius: 10px; border: none;">
-                <option value="binocular">Binocular MVP</option>
-                <option value="blockbreaker">Block Breaker</option>
-                <option value="trajectory">Trajectory</option>
-            </select>
+            Запустите VR или stereo preview.<br>
+            Тренажёр можно выбрать в меню.
         </p>
 
         <button id="startBtn">Запустить VR</button>
@@ -188,6 +179,8 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="js/base.js"></script>
     <script src="js/input-adapters.js"></script>
+    <script src="js/trainer-registry.js"></script>
+    <script src="js/render-modes.js"></script>
     <script src="js/runtime.js"></script>
     <script src="js/trainers/binocular.js"></script>
     <script src="js/trainers/blockbreaker.js"></script>

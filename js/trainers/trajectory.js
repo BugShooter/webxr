@@ -3,8 +3,6 @@
 
   function createTrajectoryTrainer() {
     return {
-      id: 'trajectory',
-      name: 'Trajectory',
       init({ runtime, THREE, Base, scene }) {
         let group;
 
@@ -462,6 +460,9 @@
     };
   }
 
-  window.WebXRTrainers = window.WebXRTrainers || {};
-  window.WebXRTrainers.trajectory = createTrajectoryTrainer;
+  window.WebXRTrainerRegistry.register({
+    id: 'trajectory',
+    name: 'Trajectory',
+    create: createTrajectoryTrainer,
+  });
 })();

@@ -2,8 +2,6 @@
   'use strict';
 
   function createBlockBreakerTrainer() {
-    const ID = 'blockbreaker';
-
     // Game constants
     const BOARD_W = 1.4;
     const BOARD_H = 0.9;
@@ -256,9 +254,6 @@
     }
 
     return {
-      id: ID,
-      name: 'Block Breaker',
-
       init({ runtime, THREE: THREE0, Base: Base0, scene: scene0 }) {
         THREE = THREE0;
         Base = Base0;
@@ -576,6 +571,9 @@
     };
   }
 
-  window.WebXRTrainers = window.WebXRTrainers || {};
-  window.WebXRTrainers.blockbreaker = createBlockBreakerTrainer;
+  window.WebXRTrainerRegistry.register({
+    id: 'blockbreaker',
+    name: 'Block Breaker',
+    create: createBlockBreakerTrainer,
+  });
 })();

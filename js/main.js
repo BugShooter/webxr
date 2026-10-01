@@ -11,7 +11,6 @@
   const eyeLabels = document.getElementById('eyeLabels');
   const statusDiv = document.getElementById('status');
   const container = document.getElementById('container');
-  const trainerSelect = document.getElementById('trainerSelect');
   const versionEl = document.getElementById('buildVersion');
 
   function log(msg) {
@@ -21,15 +20,10 @@
 
   if (versionEl) versionEl.textContent = BUILD;
 
-  function getSelectedTrainerId() {
-    return trainerSelect?.value || 'binocular';
-  }
-
   async function startXR() {
     try {
       startBtn.disabled = true;
 
-      const trainerId = getSelectedTrainerId();
       if (!window.WebXRRuntime?.start) {
         log('❌ Runtime не загружен');
         startBtn.disabled = false;
@@ -44,7 +38,6 @@
         mode: 'vr',
         log,
         build: BUILD,
-        initialTrainerId: trainerId,
       });
     } catch (err) {
       console.error(err);
@@ -69,7 +62,6 @@
         mode: 'desktop',
         log,
         build: BUILD,
-        initialTrainerId: getSelectedTrainerId(),
       });
       stopDesktopPreview = handle?.end || null;
     } catch (err) {

@@ -11,14 +11,15 @@
     statusDiv,
     log,
     build,
-    initialTrainerId,
     mode = 'vr',
   }) {
     const THREE = window.THREE;
     const Base = window.WebXRBase;
+    const trainerRegistry = window.WebXRTrainerRegistry;
+    const renderModes = window.WebXRRenderModes;
     const desktopMode = mode === 'desktop';
 
-    if (!THREE || !Base) throw new Error('THREE/Base not loaded');
+    if (!THREE || !Base || !trainerRegistry || !renderModes) throw new Error('Runtime dependencies not loaded');
 
     const runtime = {
       THREE,
@@ -55,10 +56,10 @@
     let scene;
     let camera;
     let renderer;
+    let renderMode;
 
     let controller0;
     let controller1;
-    let desktopEyes = null;
     let resizeHandler = null;
     let inputAdapter = null;
     let desktopPointerMoveHandler = null;
@@ -141,22 +142,6 @@
     function clampMs(v) {
       const n = Math.round(v);
       return Math.max(0, Math.min(600000, n));
-    }
-
-    function listTrainers() {
-      const reg = window.WebXRTrainers || {};
-      const ids = Object.keys(reg).sort();
-      const trainers = [];
-      for (const id of ids) {
-        const factory = reg[id];
-        if (typeof factory !== 'function') continue;
-        const t = factory();
-        if (!t) continue;
-        // new interface must provide init/update/dispose
-        if (typeof t.init !== 'function' || typeof t.update !== 'function') continue;
-        trainers.push({ id: t.id || id, name: t.name || id, factory });
-      }
-      return trainers;
     }
 
     function currentFadeProfile() {
@@ -276,9 +261,13 @@
     }
 
     function trainerMenuItems() {
-      const trainers = listTrainers();
-      const items = [];
-      for (const t of trainers) items.push({ kind: 'pickTrainer', trainerId: t.id, label: `Start: ${t.name}` });
+      const items = trainerRegistry.list().map((trainer) => ({
+        kind: 'pickTrainer',
+        trainerId: trainer.id,
+        label: trainer.id === runtime.activeTrainerId
+          ? `Current: ${trainer.name}`
+          : `Switch to: ${trainer.name}`,
+      }));
       items.push({ kind: 'openSettings', label: 'Settings…' });
       items.push({ kind: 'exit', label: 'Exit VR' });
       items.push({ kind: 'close', label: 'Close' });
@@ -681,7 +670,8 @@
         scene.clear();
       }
 
-      renderer?.dispose();
+      renderMode?.dispose();
+      renderMode = null;
       scene = null;
       camera = null;
       renderer = null;
@@ -693,23 +683,23 @@
       laser.dot = null;
       laser.line0 = null;
       laser.line1 = null;
-      desktopEyes = null;
       resizeHandler = null;
       desktopPointerMoveHandler = null;
     }
 
     function setTrainer(id) {
-      const reg = window.WebXRTrainers || {};
-      const factory = reg[id];
-      if (typeof factory !== 'function') {
+      const registration = trainerRegistry.get(id);
+      if (!registration) {
         status('❌ Trainer not found: ' + id);
-        return;
+        return false;
       }
 
-      const trainer = factory();
+      if (runtime.activeTrainerId === id) return true;
+
+      const trainer = registration.create();
       if (!trainer || typeof trainer.init !== 'function' || typeof trainer.update !== 'function') {
         status('❌ Trainer has no init/update: ' + id);
-        return;
+        return false;
       }
 
       disposeActiveTrainer();
@@ -718,54 +708,25 @@
 
       trainer.init({ runtime, THREE, Base, scene, camera, renderer });
 
-      status('✅ Trainer: ' + (trainer.name || id));
+      status('✅ Trainer: ' + registration.name);
+      return true;
     }
 
     runtime.setTrainer = setTrainer;
 
     function resizeRenderer() {
-      if (!renderer || !camera) return;
-      const width = Math.max(1, window.innerWidth);
-      const height = Math.max(1, window.innerHeight);
-      renderer.setSize(width, height);
-      camera.aspect = width / height;
-      camera.updateProjectionMatrix();
-      if (desktopEyes) {
-        const eyeAspect = (width / 2) / height;
-        for (const eyeCamera of desktopEyes) {
-          eyeCamera.aspect = eyeAspect;
-          eyeCamera.updateProjectionMatrix();
-        }
-      }
+      renderMode?.resize();
     }
 
     function initThreeJS() {
       scene = new THREE.Scene();
       scene.background = new THREE.Color(0x0a0a0a);
 
-      camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
-      camera.position.set(0, 1.6, 0);
+      renderMode = renderModes.create({ mode: desktopMode ? 'desktop' : 'vr', THREE, canvas });
+      camera = renderMode.camera;
+      renderer = renderMode.renderer;
       // Needed so camera-attached UI (menu panel) is part of the scene graph
       scene.add(camera);
-
-      if (desktopMode) {
-        const eyeAspect = (window.innerWidth / 2) / Math.max(1, window.innerHeight);
-        const leftEye = new THREE.PerspectiveCamera(75, eyeAspect, 0.1, 100);
-        const rightEye = new THREE.PerspectiveCamera(75, eyeAspect, 0.1, 100);
-        leftEye.position.x = -0.032;
-        rightEye.position.x = 0.032;
-        leftEye.layers.set(0);
-        leftEye.layers.enable(1);
-        rightEye.layers.set(0);
-        rightEye.layers.enable(2);
-        camera.add(leftEye, rightEye);
-        desktopEyes = [leftEye, rightEye];
-      }
-
-      renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
-      renderer.setPixelRatio(window.devicePixelRatio);
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      renderer.xr.enabled = !desktopMode;
 
       scene.add(new THREE.AmbientLight(0xffffff, 0.85));
       const light1 = new THREE.DirectionalLight(0xffffff, 0.6);
@@ -786,8 +747,8 @@
       grid.layers.set(0);
       scene.add(grid);
 
-      controller0 = renderer.xr.getController(0);
-      controller1 = renderer.xr.getController(1);
+      controller0 = renderMode.getController(0);
+      controller1 = renderMode.getController(1);
       runtime.controllers = { left: controller0, right: controller1 };
 
       // Simple controller visualization (small cone) so you can see where hands are.
@@ -857,48 +818,6 @@
       }
     }
 
-    function updateDesktopControllerPose() {
-      if (!desktopEyes || !controller0 || !controller1) return;
-      const bounds = canvas.getBoundingClientRect();
-      const width = Math.max(1, bounds.width);
-      const height = Math.max(1, bounds.height);
-      const x = Base.clamp(desktopPointer.x, 0, width);
-      const y = Base.clamp(desktopPointer.y, 0, height);
-      const eyeIndex = x < width / 2 ? 0 : 1;
-      const eyeCamera = desktopEyes[eyeIndex];
-      const eyeX = eyeIndex === 0 ? x : x - width / 2;
-      const ndcX = (eyeX / (width / 2)) * 2 - 1;
-      const ndcY = 1 - (y / height) * 2;
-
-      eyeCamera.updateMatrixWorld(true);
-      const origin = eyeCamera.getWorldPosition(new THREE.Vector3());
-      const direction = new THREE.Vector3(ndcX, ndcY, 0.5).unproject(eyeCamera).sub(origin).normalize();
-      controller1.position.copy(origin).addScaledVector(direction, 0.08);
-      controller1.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), direction);
-
-      camera.updateMatrixWorld(true);
-      const leftHandPosition = camera.localToWorld(new THREE.Vector3(-0.22, -0.2, -0.55));
-      controller0.position.copy(leftHandPosition);
-      controller0.quaternion.copy(camera.getWorldQuaternion(new THREE.Quaternion()));
-    }
-
-    function renderDesktopStereo() {
-      const width = Math.max(1, window.innerWidth);
-      const height = Math.max(1, window.innerHeight);
-      const leftWidth = Math.floor(width / 2);
-      const rightWidth = width - leftWidth;
-
-      renderer.setScissorTest(true);
-      renderer.setViewport(0, 0, leftWidth, height);
-      renderer.setScissor(0, 0, leftWidth, height);
-      renderer.render(scene, desktopEyes[0]);
-      renderer.setViewport(leftWidth, 0, rightWidth, height);
-      renderer.setScissor(leftWidth, 0, rightWidth, height);
-      renderer.render(scene, desktopEyes[1]);
-      renderer.setScissorTest(false);
-      renderer.setViewport(0, 0, width, height);
-    }
-
     async function start() {
       let session;
       try {
@@ -958,9 +877,9 @@
       settingsMenu.panel.visible = false;
 
       // Start trainer
-      const trainers = listTrainers();
-      const fallbackId = trainers[0]?.id || initialTrainerId;
-      setTrainer(initialTrainerId || fallbackId);
+      const defaultTrainer = trainerRegistry.getDefault();
+      if (defaultTrainer) setTrainer(defaultTrainer.id);
+      openTrainerMenu();
 
       let lastTimeMs = 0;
       renderer.setAnimationLoop((timeMs) => {
@@ -968,7 +887,7 @@
         lastTimeMs = timeMs;
 
         inputAdapter.poll(session);
-        if (desktopMode) updateDesktopControllerPose();
+        renderMode.updateControllerPose({ controller0, controller1, pointer: desktopPointer });
 
         // Preferred: left grip (squeeze) to toggle menu.
         if (input.justSqueezeL || input.justMenu) {
@@ -1011,20 +930,6 @@
           }
         }
 
-        // Set per-eye layers
-        if (!desktopMode) {
-          const xrCamera = renderer.xr.getCamera(camera);
-          if (xrCamera && xrCamera.isArrayCamera && xrCamera.cameras && xrCamera.cameras.length >= 2) {
-            xrCamera.cameras[0].layers.enable(0);
-            xrCamera.cameras[0].layers.enable(1);
-            xrCamera.cameras[0].layers.disable(2);
-
-            xrCamera.cameras[1].layers.enable(0);
-            xrCamera.cameras[1].layers.enable(2);
-            xrCamera.cameras[1].layers.disable(1);
-          }
-        }
-
         // Reset one-shot flags
         input.justSelect = false;
         input.justSqueeze = false;
@@ -1037,8 +942,7 @@
         input.justMenu = false;
         input.justTriggerR = false;
 
-        if (desktopMode) renderDesktopStereo();
-        else renderer.render(scene, camera);
+        renderMode.render(scene);
       });
 
       return desktopMode ? { end: runtime.endSession } : session;

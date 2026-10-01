@@ -61,7 +61,6 @@
   }
 
   function createBinocularTrainer() {
-    const ID = 'binocular';
     const MODES = ['alignment', 'split'];
     const SPLIT_SHAPES = ['vertical', 'horizontal', 'zigzag'];
     const PULSE_PERIODS = [0.6, 1.0, 1.6, 2.4];
@@ -233,9 +232,6 @@
     }
 
     return {
-      id: ID,
-      name: 'Binocular MVP',
-
       init({ THREE: THREE0, Base: Base0, scene: scene0 }) {
         THREE = THREE0;
         Base = Base0;
@@ -362,6 +358,10 @@
     };
   }
 
-  window.WebXRTrainers = window.WebXRTrainers || {};
-  window.WebXRTrainers.binocular = createBinocularTrainer;
+  window.WebXRTrainerRegistry.register({
+    id: 'binocular',
+    name: 'Binocular MVP',
+    create: createBinocularTrainer,
+    isDefault: true,
+  });
 })();
