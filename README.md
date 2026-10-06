@@ -42,6 +42,8 @@ Choose **Open stereo preview** to run without WebXR. The browser shows separate 
 - **Space**: A / right trigger
 - **X / Y / B**: controller buttons
 
+The desktop preview hides simulated controller models and shows the reference floor; a center line separates the eye views. The mouse cursor and menu ray indicate pointing.
+
 ## Settings
 
 Open the menu → **Settings**:

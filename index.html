@@ -86,7 +86,7 @@
             height: 100%;
         }
 
-        #desktopControls[hidden], #eyeLabels[hidden] {
+        #desktopControls[hidden], #eyeLabels[hidden], #eyeDivider[hidden] {
             display: none;
         }
 
@@ -141,6 +141,18 @@
             background: rgba(39, 115, 128, 0.9);
         }
 
+        #eyeDivider {
+            position: fixed;
+            z-index: 30;
+            top: 0;
+            bottom: 0;
+            left: 50%;
+            width: 2px;
+            transform: translateX(-50%);
+            background: rgba(235, 241, 235, 0.9);
+            pointer-events: none;
+        }
+
         @media (max-width: 700px) {
             #desktopControls {
                 align-items: flex-start;
@@ -171,6 +183,7 @@
     
     <canvas id="glCanvas"></canvas>
     <div id="eyeLabels" hidden><span>LEFT EYE</span><span>RIGHT EYE</span></div>
+    <div id="eyeDivider" hidden aria-hidden="true"></div>
     <div id="desktopControls" hidden>
         <span>Мышь: наводка / клик: триггер · WASD: левый стик · стрелки: правый стик · Q: grip · Space: A/trigger · X/Y: кнопки</span>
         <button id="desktopExitBtn" type="button">Выйти</button>

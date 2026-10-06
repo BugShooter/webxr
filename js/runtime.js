@@ -7,6 +7,7 @@
     desktopBtn,
     desktopControls,
     eyeLabels,
+    eyeDivider,
     container,
     statusDiv,
     log,
@@ -41,6 +42,7 @@
           { name: 'ALT: on1000 out500 off3000 in500', onMs: 1000, fadeOutMs: 500, offMs: 3000, fadeInMs: 500 },
         ],
         fadeProfileIndex: 1,
+        floorMode: 'checkerboard', // 'checkerboard' | 'grid' | 'none'
       },
       input: null,
       menu: null,
@@ -60,11 +62,20 @@
 
     let controller0;
     let controller1;
+    let floorMesh = null;
+    let floorGrid = null;
     let resizeHandler = null;
     let inputAdapter = null;
     let desktopPointerMoveHandler = null;
+    let desktopPointerLayer = 1;
     let menuAdjustAtMs = -1e9;
     const desktopPointer = { x: window.innerWidth * 0.75, y: window.innerHeight * 0.5 };
+
+    function updateFloorVisibility() {
+      const mode = runtime.settings.floorMode || 'checkerboard';
+      if (floorMesh) floorMesh.visible = (mode === 'checkerboard');
+      if (floorGrid) floorGrid.visible = (mode === 'grid' || mode === 'checkerboard');
+    }
 
     // Input state (normalized)
     const input = {
@@ -280,7 +291,16 @@
         `Fade profile: ${p?.name || '—'} ` +
         `[ON ${p.onMs} OUT ${p.fadeOutMs} OFF ${p.offMs} IN ${p.fadeInMs}] (Trigger: next)`;
 
+      const floorLabels = {
+        none: 'Без пола',
+        grid: 'Сетка без шашечек',
+        checkerboard: 'Шашечки',
+      };
+      const currentFloorMode = runtime.settings.floorMode || 'checkerboard';
+      const floorLabel = `Пол: ${floorLabels[currentFloorMode] || 'Шашечки'} (Trigger: toggle)`;
+
       return [
+        { kind: 'floorMode', label: floorLabel },
         { kind: 'altEnabled', label: `ALT fade: ${runtime.settings.altFadeEnabled ? 'ON' : 'OFF'} (Trigger: toggle)` },
         { kind: 'profile', label: profileLabel },
         { kind: 'timing_on', label: `Timing ON: ${p.onMs} ms (Adjust: right stick X)` },
@@ -313,6 +333,14 @@
 
       if (item.kind === 'back') {
         openTrainerMenu();
+        return;
+      }
+
+      if (item.kind === 'floorMode') {
+        const modes = ['checkerboard', 'grid', 'none'];
+        const currentIdx = modes.indexOf(runtime.settings.floorMode || 'checkerboard');
+        runtime.settings.floorMode = modes[(currentIdx + 1) % modes.length];
+        updateFloorVisibility();
         return;
       }
 
@@ -489,7 +517,7 @@
         return line;
       };
 
-      if (!laser.line0) {
+      if (!desktopMode && !laser.line0) {
         laser.line0 = makeLine();
         controller0.add(laser.line0);
       }
@@ -501,6 +529,11 @@
 
     function updateLaserAndPick(menuState, items) {
       ensureLaser();
+
+      if (desktopMode) {
+        laser.dot.layers.set(desktopPointerLayer);
+        if (laser.line1) laser.line1.layers.set(desktopPointerLayer);
+      }
 
       const panel = menuState.panel;
       const layout = menuState.layout;
@@ -563,9 +596,9 @@
       const lLine = lineFor(leftCtrl) || laser.line0;
 
       const r = tryController(rightCtrl, rLine);
-      const l = r ? null : tryController(leftCtrl, lLine);
+      const l = desktopMode || r ? null : tryController(leftCtrl, lLine);
 
-      if (laser.line0) laser.line0.visible = !!menuState.open;
+      if (laser.line0) laser.line0.visible = !desktopMode && !!menuState.open;
       if (laser.line1) laser.line1.visible = !!menuState.open;
 
       const h = r || l || { hoveredIndex: -1 };
@@ -683,6 +716,8 @@
       laser.dot = null;
       laser.line0 = null;
       laser.line1 = null;
+      floorMesh = null;
+      floorGrid = null;
       resizeHandler = null;
       desktopPointerMoveHandler = null;
     }
@@ -733,19 +768,40 @@
       light1.position.set(2, 3, 1);
       scene.add(light1);
 
-      // Ground reference
-      const floorGeom = new THREE.PlaneGeometry(10, 10);
-      const floorMat = new THREE.MeshStandardMaterial({ color: 0x333333, side: THREE.DoubleSide });
-      const floor = new THREE.Mesh(floorGeom, floorMat);
-      floor.rotation.x = -Math.PI / 2;
-      floor.position.y = 0;
-      floor.layers.set(0);
-      scene.add(floor);
+      if (renderMode.showReferenceEnvironment) {
+        // Нейтральная шахматная текстура: 20x20 клеток на 10x10 метров (клетка = 0.5 м)
+        const checkCanvas = document.createElement('canvas');
+        checkCanvas.width = 2;
+        checkCanvas.height = 2;
+        const checkCtx = checkCanvas.getContext('2d');
+        checkCtx.fillStyle = '#303030';
+        checkCtx.fillRect(0, 0, 2, 2);
+        checkCtx.fillStyle = '#1e1e1e';
+        checkCtx.fillRect(0, 0, 1, 1);
+        checkCtx.fillRect(1, 1, 1, 1);
 
-      const grid = new THREE.GridHelper(10, 20, 0x666666, 0x444444);
-      grid.position.y = 0.01;
-      grid.layers.set(0);
-      scene.add(grid);
+        const floorTexture = new THREE.CanvasTexture(checkCanvas);
+        floorTexture.wrapS = THREE.RepeatWrapping;
+        floorTexture.wrapT = THREE.RepeatWrapping;
+        floorTexture.repeat.set(10, 10);
+        floorTexture.magFilter = THREE.NearestFilter;
+        floorTexture.minFilter = THREE.NearestFilter;
+
+        const floorGeom = new THREE.PlaneGeometry(10, 10);
+        const floorMat = new THREE.MeshBasicMaterial({ map: floorTexture, side: THREE.DoubleSide });
+        floorMesh = new THREE.Mesh(floorGeom, floorMat);
+        floorMesh.rotation.x = -Math.PI / 2;
+        floorMesh.position.y = 0;
+        floorMesh.layers.set(0);
+        scene.add(floorMesh);
+
+        floorGrid = new THREE.GridHelper(10, 20, 0x555555, 0x333333);
+        floorGrid.position.y = 0.005;
+        floorGrid.layers.set(0);
+        scene.add(floorGrid);
+
+        updateFloorVisibility();
+      }
 
       controller0 = renderMode.getController(0);
       controller1 = renderMode.getController(1);
@@ -766,8 +822,10 @@
         mesh.renderOrder = 2000;
         return mesh;
       };
-      controller0.add(makeControllerViz());
-      controller1.add(makeControllerViz());
+      if (renderMode.showControllerModels) {
+        controller0.add(makeControllerViz());
+        controller1.add(makeControllerViz());
+      }
 
       // Track handedness mapping (controller indices are not guaranteed to be left/right).
       const onConnected = (controller) => (e) => {
@@ -846,6 +904,7 @@
           if (container) container.style.display = 'block';
           if (desktopControls) desktopControls.hidden = true;
           if (eyeLabels) eyeLabels.hidden = true;
+          if (eyeDivider) eyeDivider.hidden = true;
           if (desktopBtn) desktopBtn.disabled = false;
           status('Desktop stereo завершён');
           return;
@@ -861,6 +920,7 @@
         if (container) container.style.display = 'none';
         if (desktopControls) desktopControls.hidden = false;
         if (eyeLabels) eyeLabels.hidden = false;
+        if (eyeDivider) eyeDivider.hidden = false;
         status('Desktop stereo активен');
       } else {
         session.addEventListener('end', () => {
@@ -887,7 +947,8 @@
         lastTimeMs = timeMs;
 
         inputAdapter.poll(session);
-        renderMode.updateControllerPose({ controller0, controller1, pointer: desktopPointer });
+        const pointerLayer = renderMode.updateControllerPose({ controller0, controller1, pointer: desktopPointer });
+        if (desktopMode && pointerLayer) desktopPointerLayer = pointerLayer;
 
         // Preferred: left grip (squeeze) to toggle menu.
         if (input.justSqueezeL || input.justMenu) {

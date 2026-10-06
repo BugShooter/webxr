@@ -9,6 +9,7 @@
   const desktopControls = document.getElementById('desktopControls');
   const desktopExitBtn = document.getElementById('desktopExitBtn');
   const eyeLabels = document.getElementById('eyeLabels');
+  const eyeDivider = document.getElementById('eyeDivider');
   const statusDiv = document.getElementById('status');
   const container = document.getElementById('container');
   const versionEl = document.getElementById('buildVersion');
@@ -57,6 +58,7 @@
         desktopBtn,
         desktopControls,
         eyeLabels,
+        eyeDivider,
         container,
         statusDiv,
         mode: 'desktop',

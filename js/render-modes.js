@@ -17,6 +17,8 @@
     return {
       camera,
       renderer,
+      showControllerModels: true,
+      showReferenceEnvironment: true,
       getController(index) {
         return renderer.xr.getController(index);
       },
@@ -27,7 +29,9 @@
         camera.aspect = width / height;
         camera.updateProjectionMatrix();
       },
-      updateControllerPose() {},
+      updateControllerPose() {
+        return null;
+      },
       render(scene) {
         const xrCamera = renderer.xr.getCamera(camera);
         if (xrCamera?.isArrayCamera && xrCamera.cameras.length >= 2) {
@@ -68,6 +72,8 @@
     return {
       camera,
       renderer,
+      showControllerModels: false,
+      showReferenceEnvironment: true,
       getController(index) {
         return controllers[index];
       },
@@ -106,6 +112,7 @@
         const leftHandPosition = camera.localToWorld(new THREE.Vector3(-0.22, -0.2, -0.55));
         controller0.position.copy(leftHandPosition);
         controller0.quaternion.copy(camera.getWorldQuaternion(new THREE.Quaternion()));
+        return eyeIndex === 0 ? 1 : 2;
       },
       render(scene) {
         const width = Math.max(1, window.innerWidth);
